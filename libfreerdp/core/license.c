@@ -232,13 +232,31 @@ static BOOL saveCal(rdpSettings *settings, const BYTE *data, int length, char *h
 	written = fwrite(data, length, 1, fp);
 	fclose(fp);
 
+	#pragma region Myrtille
+
+	// per device CALs are stored into the user roaming profile
+	// filenames must be processed as unicode
+
+	WCHAR* filepathNewW = NULL;
+	ConvertToUnicode(CP_UTF8, 0, filepathNew, -1, &filepathNewW, 0);
+
+	WCHAR* filepathW = NULL;
+	ConvertToUnicode(CP_UTF8, 0, filepath, -1, &filepathW, 0);
+
 	if (written != 1)
 	{
-		DeleteFile(filepathNew);
+		DeleteFile(filepathNewW);
 		goto out;
 	}
 
-	ret = MoveFileEx(filepathNew, filepath, MOVEFILE_REPLACE_EXISTING);
+	ret = MoveFileEx(filepathNewW, filepathW, MOVEFILE_REPLACE_EXISTING);
+
+	if (ret == 0)
+	{
+		WLog_ERR(TAG, "failed to write per device CAL %s with error %d", filepath, GetLastError());
+	}
+
+	#pragma endregion
 
 out:
 	free(filepathNew);
