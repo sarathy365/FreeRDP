@@ -761,10 +761,7 @@ static DWORD WINAPI wf_client_thread(LPVOID lpParam)
 		}
 		else
 		{
-			error = freerdp_get_last_error(instance->context);
-			fclose(stdout);
-			fclose(stderr);
-			ExitProcess(error);
+			wf_myrtille_stop(wfc);
 		}
 	}
 
@@ -906,10 +903,7 @@ disconnect:
 
 	if (context->settings->MyrtilleSessionId != NULL)
 	{
-		error = freerdp_get_last_error(instance->context);
-		fclose(stdout);
-		fclose(stderr);
-		ExitProcess(error);
+		wf_myrtille_stop(wfc);
 	}
 
 	#pragma endregion

@@ -1296,7 +1296,8 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 	Gdiplus::GdiplusShutdown(myrtille->gdiplusToken);
 	fclose(stdout);
 	fclose(stderr);
-	exit(EXIT_SUCCESS);
+	UINT32 exitCode = freerdp_get_last_error((rdpContext*)wfc);
+	exit(exitCode);
 	return 0;
 }
 
