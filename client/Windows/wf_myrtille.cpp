@@ -1293,6 +1293,7 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 
 	CloseHandle(myrtille->inputsPipe);
 	CloseHandle(myrtille->updatesPipe);
+	CloseHandle(myrtille->audioPipe);
 	Gdiplus::GdiplusShutdown(myrtille->gdiplusToken);
 	fclose(stdout);
 	fclose(stderr);
