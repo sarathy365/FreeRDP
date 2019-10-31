@@ -1982,12 +1982,12 @@ static UINT wf_cliprdr_server_format_list(CliprdrClientContext* context,
 		#pragma endregion
 	}
 
-	#pragma region Myrtille
+	//#pragma region Myrtille
 
-	if (context->rdpcontext->settings->MyrtilleSessionId == NULL)
-	{
+	//if (context->rdpcontext->settings->MyrtilleSessionId == NULL)
+	//{
 
-	#pragma endregion
+	//#pragma endregion
 
 	if (file_transferring(clipboard))
 	{
@@ -2013,19 +2013,21 @@ static UINT wf_cliprdr_server_format_list(CliprdrClientContext* context,
 	
 	#pragma region Myrtille
 
-	}
-	else
-	{
-		wfContext* wfc = (wfContext*)context->rdpcontext;
+	//}
+	//else
+	//{
+		if (context->rdpcontext->settings->MyrtilleSessionId != NULL)
+		{
+			// the server clipboard content has changed (a copy action was triggered)
+			if (unicodeTextFormatMapping)
+			{
+				wfContext* wfc = (wfContext*)context->rdpcontext;
+				wf_myrtille_read_server_clipboard(wfc);
+			}
+		}
 
-		// the remote clipboard content has changed (copy)
-		// invalidate it so that the next clipboard request (paste) will trigger a new content request then save the result
-		// as long as the remote clipboard doesn't change, every request will send the saved content
-		if (unicodeTextFormatMapping)
-			wf_myrtille_reset_clipboard(wfc);
-
-		rc = CHANNEL_RC_OK;
-	}
+		//rc = CHANNEL_RC_OK;
+	//}
 
 	#pragma endregion
 
@@ -2254,6 +2256,13 @@ static UINT wf_cliprdr_server_format_data_request(CliprdrClientContext* context,
 	}
 	else
 	{
+		//#pragma region Myrtille
+
+		//if (context->rdpcontext->settings->MyrtilleSessionId == NULL)
+		//{
+
+		//#pragma endregion
+
 		if (!OpenClipboard(clipboard->hwnd))
 			return ERROR_INTERNAL_ERROR;
 
@@ -2271,6 +2280,29 @@ static UINT wf_cliprdr_server_format_data_request(CliprdrClientContext* context,
 		CopyMemory(buff, globlemem, size);
 		GlobalUnlock(hClipdata);
 		CloseClipboard();
+
+		//#pragma region Myrtille
+
+		//}
+		//// when using myrtille, don't retrieve the client clipboard from the local machine (gateway)
+		//// instead, retrieve the value previously received from the browser
+		//else
+		//{
+		//	wfContext* wfc = (wfContext*)context->rdpcontext;
+		//	wchar_t* text;
+		//	
+		//	// retrieve the client clipboard
+		//	wf_myrtille_read_client_clipboard(wfc, &text, &size);
+
+		//	// copy it into the buffer (including the null terminator!)
+		//	buff = malloc(size);
+		//	CopyMemory(buff, text, size);
+		//	
+		//	// set the response type (missing from original code, intentionally?)
+		//	response.msgType = CB_FORMAT_DATA_RESPONSE;
+		//}
+
+		#pragma endregion
 	}
 
 	response.msgFlags = CB_RESPONSE_OK;
@@ -2335,11 +2367,11 @@ static UINT wf_cliprdr_server_format_data_response(CliprdrClientContext*
 
 	#pragma region Myrtille
 
-	wfContext* wfc = (wfContext*)context->rdpcontext;
+	// the server clipboard was requested; send it
 	if (context->rdpcontext->settings->MyrtilleSessionId != NULL)
 	{
-		// remote clipboard content was requested; send the response
-		wf_myrtille_send_clipboard(wfc, data, formatDataResponse->dataLen);
+		wfContext* wfc = (wfContext*)context->rdpcontext;
+		wf_myrtille_send_server_clipboard(wfc, data, formatDataResponse->dataLen);
 	}
 
 	#pragma endregion

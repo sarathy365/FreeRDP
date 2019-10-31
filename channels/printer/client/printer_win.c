@@ -122,12 +122,7 @@ static void printer_win_close_printjob(rdpPrintJob* printjob)
 	if (printjob->printer->rdpcontext->settings->MyrtilleSessionId != NULL && strcmp(printjob->printer->name, "Myrtille PDF") == 0)
 	{
 		RDP_CLIENT_ENTRY_POINTS* pEntryPoints = printjob->printer->rdpcontext->instance->pClientEntryPoints;
-		
-		char* printJobName;
-		if (ConvertFromUnicode(CP_UTF8, 0, win_printjob->di.pDocName, -1, &printJobName, 0, NULL, NULL) >= 1)
-		{
-			IFCALL(pEntryPoints->ClientPrint, printjob->printer->rdpcontext, printJobName);
-		}
+		IFCALL(pEntryPoints->ClientPrint, printjob->printer->rdpcontext, win_printjob->di.pDocName);
 	}
 
 	#pragma endregion
@@ -165,8 +160,8 @@ static rdpPrintJob* printer_win_create_printjob(rdpPrinter* printer, UINT32 id)
 		snprintf(pid, sizeof(pid), "%lu", GetCurrentProcessId());
 		strcat(printJobName, pid);
 
-		char now[10];
-		snprintf(now, sizeof(now), "%lu", GetTickCount());
+		char now[19];
+		snprintf(now, sizeof(now), "%llu", GetTickCount64());
 		strcat(printJobName, now);
 
 		WCHAR* printJobNameW = NULL;

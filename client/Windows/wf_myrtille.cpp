@@ -51,14 +51,16 @@ std::wstring s2ws(const std::string& s);
 DWORD connectRemoteSessionPipes(wfContext* wfc);
 HANDLE connectRemoteSessionPipe(wfContext* wfc, std::string pipeName, DWORD accessMode, DWORD shareMode, DWORD flags);
 std::string createRemoteSessionDirectory(wfContext* wfc);
+void processResizeDisplay(wfContext* wfc, std::string args);
 void processMouseInput(wfContext* wfc, std::string input, UINT16 flags);
-void sendMessage(wfContext* wfc, std::string msg);
+void sendMessage(wfContext* wfc, std::wstring msg);
 void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int right, int bottom, bool fullscreen);
 void saveImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int idx, int format, int quality, bool fullscreen);
 void sendImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int idx, int posX, int posY, int width, int height, int format, int quality, IStream* stream, int size, bool fullscreen);
 void sendAudio(wfContext* wfc, const BYTE* data, size_t size);
 void takeScreenshot(wfContext* wfc, Gdiplus::Bitmap* bmp);
 void int32ToBytes(int value, int offset, byte* bytes);
+int bytesToInt32(byte* bytes);
 
 void webPEncoder(wfContext* wfc, Gdiplus::Bitmap* bmp, int idx, IStream* stream, float quality, bool fullscreen);
 static int webPWriter(const uint8_t* data, size_t data_size, const WebPPicture* const pic);
@@ -68,6 +70,9 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter);
 #define TAG CLIENT_TAG("myrtille")
 
 #define IMAGE_COUNT_SAMPLING_RATE 100		// ips sampling (%) less images = lower cpu and bandwidth usage / faster; more = smoother display (skipping images may result in some display inconsistencies). tweaked dynamically to fit the available bandwidth; possible values: 5, 10, 20, 25, 50, 100 (lower = higher drop rate)
+
+#define CLIPBOARD_MAX_LENGTH_LOG 100		// max number of characters to log for the client clipboard
+#define CLIPBOARD_MAX_LENGTH_SEND 1048576	// max number of characters to send for the server clipboard; 1MB is usually enough for most copy/paste actions
 
 // command
 enum class COMMAND
@@ -83,34 +88,35 @@ enum class COMMAND
 
 	// browser
 	SEND_BROWSER_RESIZE = 7,
+	SEND_BROWSER_PULSE = 8,
 
 	// keyboard
-	SEND_KEY_UNICODE = 8,
-	SEND_KEY_SCANCODE = 9,
+	SEND_KEY_UNICODE = 9,
+	SEND_KEY_SCANCODE = 10,
 
 	// mouse
-	SEND_MOUSE_MOVE = 10,
-	SEND_MOUSE_LEFT_BUTTON = 11,
-	SEND_MOUSE_MIDDLE_BUTTON = 12,
-	SEND_MOUSE_RIGHT_BUTTON = 13,
-	SEND_MOUSE_WHEEL_UP = 14,
-	SEND_MOUSE_WHEEL_DOWN = 15,
+	SEND_MOUSE_MOVE = 11,
+	SEND_MOUSE_LEFT_BUTTON = 12,
+	SEND_MOUSE_MIDDLE_BUTTON = 13,
+	SEND_MOUSE_RIGHT_BUTTON = 14,
+	SEND_MOUSE_WHEEL_UP = 15,
+	SEND_MOUSE_WHEEL_DOWN = 16,
 
 	// control
-	SET_SCALE_DISPLAY = 16,
-	SET_RECONNECT_SESSION = 17,
-	SET_IMAGE_ENCODING = 18,
-	SET_IMAGE_QUALITY = 19,
-	SET_IMAGE_QUANTITY = 20,
-	SET_AUDIO_FORMAT = 21,
-	SET_AUDIO_BITRATE = 22,
-	SET_SCREENSHOT_CONFIG = 23,
-	START_TAKING_SCREENSHOTS = 24,
-	STOP_TAKING_SCREENSHOTS = 25,
-	TAKE_SCREENSHOT = 26,
-	REQUEST_FULLSCREEN_UPDATE = 27,
-	REQUEST_REMOTE_CLIPBOARD = 28,
-	CLOSE_CLIENT = 29
+	SET_SCALE_DISPLAY = 17,
+	SET_RECONNECT_SESSION = 18,
+	SET_IMAGE_ENCODING = 19,
+	SET_IMAGE_QUALITY = 20,
+	SET_IMAGE_QUANTITY = 21,
+	SET_AUDIO_FORMAT = 22,
+	SET_AUDIO_BITRATE = 23,
+	SET_SCREENSHOT_CONFIG = 24,
+	START_TAKING_SCREENSHOTS = 25,
+	STOP_TAKING_SCREENSHOTS = 26,
+	TAKE_SCREENSHOT = 27,
+	REQUEST_FULLSCREEN_UPDATE = 28,
+	SEND_LOCAL_CLIPBOARD = 29,
+	CLOSE_CLIENT = 30
 };
 
 // command mapping
@@ -175,6 +181,7 @@ struct wf_myrtille
 	bool scaleDisplay;						// overrides the FreeRDP "SmartSizing" setting; the objective is not to interfere with the FreeRDP window, if shown
 	int clientWidth;						// overrides wf_context::client_width
 	int clientHeight;						// overrides wf_context::client_height
+	float aspectRatio;						// original aspect ratio of the display
 
 	// audio
 	int audioFormat;						// if needed (handled by the gateway)
@@ -187,8 +194,7 @@ struct wf_myrtille
 	bool screenshotEnabled;					// take screenshot on the next fullscreen update
 
 	// clipboard
-	std::string clipboardText;
-	bool clipboardUpdated;
+	//std::wstring clipboardText;			// unicode
 
 	// GDI+
 	ULONG_PTR gdiplusToken;
@@ -234,6 +240,7 @@ void wf_myrtille_start(wfContext* wfc)
 	prefixes (3 chars) are used to serialize commands with strings instead of numbers
 	they make it easier to read log traces to find out which commands are issued
 	they must match the prefixes used client side
+	commands can also be reordered without any issue
 	*/
 	commandMap["SRV"] = COMMAND::SEND_SERVER_ADDRESS;
 	commandMap["VMG"] = COMMAND::SEND_VM_GUID;
@@ -243,6 +250,7 @@ void wf_myrtille_start(wfContext* wfc)
 	commandMap["PRG"] = COMMAND::SEND_START_PROGRAM;
 	commandMap["CON"] = COMMAND::CONNECT_CLIENT;
 	commandMap["RSZ"] = COMMAND::SEND_BROWSER_RESIZE;
+	commandMap["PLS"] = COMMAND::SEND_BROWSER_PULSE;
 	commandMap["KUC"] = COMMAND::SEND_KEY_UNICODE;
 	commandMap["KSC"] = COMMAND::SEND_KEY_SCANCODE;
 	commandMap["MMO"] = COMMAND::SEND_MOUSE_MOVE;
@@ -263,7 +271,7 @@ void wf_myrtille_start(wfContext* wfc)
 	commandMap["SS0"] = COMMAND::STOP_TAKING_SCREENSHOTS;
 	commandMap["SCN"] = COMMAND::TAKE_SCREENSHOT;
 	commandMap["FSU"] = COMMAND::REQUEST_FULLSCREEN_UPDATE;
-	commandMap["CLP"] = COMMAND::REQUEST_REMOTE_CLIPBOARD;
+	commandMap["CLP"] = COMMAND::SEND_LOCAL_CLIPBOARD;
 	commandMap["CLO"] = COMMAND::CLOSE_CLIENT;
 
 	// inputs
@@ -280,6 +288,7 @@ void wf_myrtille_start(wfContext* wfc)
 	myrtille->scaleDisplay = false;
 	myrtille->clientWidth = wfc->context.settings->DesktopWidth;
 	myrtille->clientHeight = wfc->context.settings->DesktopHeight;
+	myrtille->aspectRatio = (float)myrtille->clientWidth / (float)myrtille->clientHeight;
 
 	// audio
 	myrtille->audioFormat = (int)AUDIO_FORMAT::MP3;
@@ -292,12 +301,36 @@ void wf_myrtille_start(wfContext* wfc)
 	myrtille->screenshotEnabled = false;
 
 	// clipboard
-	myrtille->clipboardText = "clipboard|";
-	myrtille->clipboardUpdated = false;
+	//myrtille->clipboardText = L"";
+
+	// if the local (gateway) clipboard is empty, the rdp server won't enable the paste action
+	// this is a problem because, even if the client (browser) clipboard is received and its value stored,
+	// it won't be possible to paste it, thus retrieve it and render it! :/
+	
+	// a workaround is to add an empty value into the clipboard in order to enable the paste action
+	// pasting an empty value just does nothing and it's quite reasonable to have the paste action enabled for clipboard synchronization
+	// once the client clipboard is received, the paste action will trigger its retrieval and rendering!
+
+	// TODO: find a better way to handle that...
+
+	//if (OpenClipboard(0))
+	//{
+	//	HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+	//	if (!hData)
+	//	{
+	//		size_t bytesPerChar = sizeof(wchar_t);
+	//		size_t size = (wcslen(myrtille->clipboardText.c_str()) + 1) * bytesPerChar;
+	//		HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
+	//		memcpy(GlobalLock(hMem), myrtille->clipboardText.c_str(), size);
+	//		GlobalUnlock(hMem);
+	//		SetClipboardData(CF_UNICODETEXT, hMem);
+	//	}
+	//	CloseClipboard();
+	//}
 
 	// GDI+
 	GdiplusStartupInput gdiplusStartupInput;
-	GdiplusStartup(&myrtille->gdiplusToken, &gdiplusStartupInput, NULL);
+	Gdiplus::GdiplusStartup(&myrtille->gdiplusToken, &gdiplusStartupInput, NULL);
 
 	getEncoderClsid(L"image/png", &myrtille->pngClsid);
 	getEncoderClsid(L"image/jpeg", &myrtille->jpgClsid);
@@ -697,47 +730,70 @@ void wf_myrtille_send_cursor(wfContext* wfc)
 	hdc = NULL;
 }
 
-void wf_myrtille_reset_clipboard(wfContext* wfc)
+//void wf_myrtille_read_client_clipboard(wfContext* wfc, const wchar_t** text, size_t* size)
+//{
+//	if (wfc->context.settings->MyrtilleSessionId == NULL)
+//		return;
+//
+//	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
+//
+//	if (myrtille->clipboardText.length() > 0)
+//	{
+//		*text = myrtille->clipboardText.c_str();
+//
+//		// unicode is 2 bytes (16 bits) per character (UTF-16LE)
+//		size_t bytesPerChar = sizeof(wchar_t);
+//
+//		// clipboard length + null terminator size in bytes
+//		*size = (myrtille->clipboardText.length() + 1) * bytesPerChar;
+//	}
+//}
+
+void wf_myrtille_read_server_clipboard(wfContext* wfc)
 {
 	if (wfc->context.settings->MyrtilleSessionId == NULL)
 		return;
 
-	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
-	
-	myrtille->clipboardText = "clipboard|";
-	myrtille->clipboardUpdated = true;
+	CLIPRDR_FORMAT_DATA_REQUEST formatDataRequest;
+	formatDataRequest.requestedFormatId = CF_UNICODETEXT;
+	wfc->cliprdr->ClientFormatDataRequest(wfc->cliprdr, &formatDataRequest);
 }
 
-void wf_myrtille_send_clipboard(wfContext* wfc, BYTE* data, UINT32 length)
+void wf_myrtille_send_server_clipboard(wfContext* wfc, BYTE* data, size_t size)
 {
 	if (wfc->context.settings->MyrtilleSessionId == NULL)
 		return;
 
-	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
+	// unicode is 2 bytes (16 bits) per character (UTF-16LE)
+	size_t bytesPerChar = sizeof(wchar_t);
+	
+	// number of characters into the clipboard
+	// subtract the null terminator
+	size_t clipboardLength = (size / bytesPerChar) - 1;
 
-	std::stringstream ss;
-	ss << "clipboard|";
-	for (int i = 0; i < length; i++)
+	// if the clipboard is larger than allowed, truncate it
+	std::wstring clipboardText(reinterpret_cast<wchar_t*>(data), clipboardLength <= CLIPBOARD_MAX_LENGTH_SEND ? clipboardLength : CLIPBOARD_MAX_LENGTH_SEND);
+
+	std::wstringstream wss;
+	wss << L"clipboard|" << clipboardText.c_str();
+
+	if (clipboardLength > CLIPBOARD_MAX_LENGTH_SEND)
 	{
-		if (data[i] != '\0')
-			ss << data[i];
+		wss << L"--- TRUNCATED ---";
 	}
-	
-	myrtille->clipboardText = ss.str();
-	myrtille->clipboardUpdated = false;
 
-	sendMessage(wfc, myrtille->clipboardText);
+	sendMessage(wfc, wss.str());
 }
 
-void wf_myrtille_send_printjob(wfContext* wfc, char* printJobName)
+void wf_myrtille_send_printjob(wfContext* wfc, wchar_t* printJobName)
 {
 	if (wfc->context.settings->MyrtilleSessionId == NULL)
 		return;
 
-	std::stringstream ss;
-	ss << "printjob|" << printJobName << ".pdf";
+	std::wstringstream wss;
+	wss << L"printjob|" << printJobName << L".pdf";
 
-	sendMessage(wfc, ss.str());
+	sendMessage(wfc, wss.str());
 }
 
 void wf_myrtille_send_audio(wfContext* wfc, const BYTE* data, size_t size)
@@ -941,14 +997,23 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 	wfContext* wfc = (wfContext*)lpParameter;
 	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
 
+	byte* buffer = NULL;
+	DWORD bytesToRead;
+	DWORD bytesRead;
+	bool sizeHeader = true;
+
 	// main loop
 	while (myrtille->processInputs)
 	{
-		CHAR buffer[4096];
-		DWORD bytesRead;
+		if (sizeHeader)
+		{
+			bytesToRead = 4;
+		}
+
+		buffer = new byte[bytesToRead];
 
 		// wait for inputs pipe event
-		if (ReadFile(myrtille->inputsPipe, buffer, sizeof(buffer), &bytesRead, NULL) == 0)
+		if (ReadFile(myrtille->inputsPipe, buffer, bytesToRead, &bytesRead, NULL) == 0)
 		{
 			switch (GetLastError())
 			{
@@ -980,315 +1045,349 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 			// pipe problem; exit
 			myrtille->processInputs = false;
 		}
-		else
+		else if (bytesRead > 0)
 		{
-			std::string message(buffer, bytesRead);
-
-			if (bytesRead > 0)
+			if (sizeHeader)
 			{
-				std::vector<std::string> inputs = split(message, '\t');
+				bytesToRead = bytesToInt32(buffer);
+			}
+			else
+			{
+				std::string message(reinterpret_cast<char*>(buffer), bytesRead);
 
-				//WLog_INFO(TAG, "processInputsPipe: ReadFile succeeded, %i command(s)", inputs.size());
+				COMMAND command = commandMap[message.substr(0, 3)];
+				std::string commandArgs = message.substr(3, message.length() - 3);
 
-				for (int i = 0; i < inputs.size(); i++)
+				// for safety sake, don't log passwords
+				if (command != COMMAND::SEND_USER_PASSWORD)
 				{
-					COMMAND command = commandMap[inputs[i].substr(0, 3)];
-					std::string commandArgs = inputs[i].substr(3, inputs[i].length() - 3);
-
-					// for safety sake, don't log passwords
-					if (command != COMMAND::SEND_USER_PASSWORD)
+					if (command != COMMAND::SEND_LOCAL_CLIPBOARD)
 					{
-						WLog_INFO(TAG, "processInputsPipe: %s", inputs[i].c_str());
+						WLog_INFO(TAG, "processInputsPipe: %s", message.c_str());
 					}
-
-					int separatorIdx;
-					std::vector<std::string> args;
-
-					switch (command)
+					else
 					{
-						// server address
-						case COMMAND::SEND_SERVER_ADDRESS:
-							
-							const char* p;
-							const char* p2;
-							int length;
-							
-							free(wfc->context.settings->ServerHostname);
-							wfc->context.settings->ServerHostname = NULL;
-							p = strchr(commandArgs.c_str(), '[');
-							
-							/* ipv4 */
-							if (!p)
-							{
-								p = strchr(commandArgs.c_str(), ':');
+						std::stringstream ss;
 
-								if (p)
+						// only log the first 100 characters (disable as needed, if a security issue)
+						// unicode characters are not preserved into the console output (stdout)
+						if (commandArgs.length() <= CLIPBOARD_MAX_LENGTH_LOG)
+						{
+							ss << message.substr(0, 3).c_str() << commandArgs.c_str();
+						}
+						else
+						{
+							ss << message.substr(0, 3).c_str() << commandArgs.substr(0, 100).c_str() << "...";
+						}
+
+						WLog_INFO(TAG, "processInputsPipe: %s", ss.str().c_str());
+					}
+				}
+
+				std::vector<std::string> args;
+
+				switch (command)
+				{
+					// server address
+					case COMMAND::SEND_SERVER_ADDRESS:
+
+						const char* p;
+						const char* p2;
+						int length;
+
+						free(wfc->context.settings->ServerHostname);
+						wfc->context.settings->ServerHostname = NULL;
+						p = strchr(commandArgs.c_str(), '[');
+
+						/* ipv4 */
+						if (!p)
+						{
+							p = strchr(commandArgs.c_str(), ':');
+
+							if (p)
+							{
+								length = (int)(p - commandArgs.c_str());
+								wfc->context.settings->ServerPort = atoi(&p[1]);
+
+								if (wfc->context.settings->ServerHostname = (char*)calloc(length + 1UL, sizeof(char)))
 								{
-									length = (int)(p - commandArgs.c_str());
-									wfc->context.settings->ServerPort = atoi(&p[1]);
-
-									if (wfc->context.settings->ServerHostname = (char*)calloc(length + 1UL, sizeof(char)))
-									{
-										strncpy(wfc->context.settings->ServerHostname, commandArgs.c_str(), length);
-										wfc->context.settings->ServerHostname[length] = '\0';
-									}
-								}
-								else
-								{
-									wfc->context.settings->ServerHostname = _strdup(commandArgs.c_str());
-								}
-							}
-							else /* ipv6 */
-							{
-								p2 = strchr(commandArgs.c_str(), ']');
-
-								/* valid [] ipv6 addr found */
-								if (p2)
-								{
-									length = p2 - p;
-
-									if (wfc->context.settings->ServerHostname = (char*)calloc(length, sizeof(char)))
-									{
-										strncpy(wfc->context.settings->ServerHostname, p + 1, length - 1);
-
-										if (*(p2 + 1) == ':')
-										{
-											wfc->context.settings->ServerPort = atoi(&p2[2]);
-										}
-									}
-								}
-							}
-							break;
-
-						// hyper-v vm guid
-						case COMMAND::SEND_VM_GUID:
-							wfc->context.settings->VmConnectMode = TRUE;
-							wfc->context.settings->ServerPort = 2179;
-							wfc->context.settings->NegotiateSecurityLayer = FALSE;
-							wfc->context.settings->SendPreconnectionPdu = TRUE;
-							free(wfc->context.settings->PreconnectionBlob);
-							wfc->context.settings->PreconnectionBlob = _strdup(commandArgs.c_str());
-							break;
-
-						// user domain
-						case COMMAND::SEND_USER_DOMAIN:
-							free(wfc->context.settings->Domain);
-							wfc->context.settings->Domain = _strdup(commandArgs.c_str());
-							break;
-
-						// user name
-						case COMMAND::SEND_USER_NAME:
-							char* user;
-							user = _strdup(commandArgs.c_str());
-							if (user)
-							{
-								free(wfc->context.settings->Username);
-								if (!wfc->context.settings->Domain && user)
-								{
-									free(wfc->context.settings->Domain);
-									freerdp_parse_username(user, &wfc->context.settings->Username, &wfc->context.settings->Domain);
-									free(user);
-								}
-								else
-									wfc->context.settings->Username = user;
-							}
-							break;
-
-						// user password
-						case COMMAND::SEND_USER_PASSWORD:
-							free(wfc->context.settings->Password);
-							wfc->context.settings->Password = _strdup(commandArgs.c_str());
-							break;
-
-						// start program
-						case COMMAND::SEND_START_PROGRAM:
-							free(wfc->context.settings->AlternateShell);
-							wfc->context.settings->AlternateShell = _strdup(commandArgs.c_str());
-							break;
-
-						// connect rdp
-						case COMMAND::CONNECT_CLIENT:
-							DWORD threadId;
-							if (CreateThread(NULL, 0, wf_client_thread, (void*)wfc->context.instance, 0, &threadId) == NULL)
-							{
-								WLog_ERR(TAG, "processInputsPipe: CreateThread failed for wf_client_thread with error %d", GetLastError());
-							}
-							break;
-
-						// browser resize
-						case COMMAND::SEND_BROWSER_RESIZE:
-							separatorIdx = commandArgs.find("x");
-							if (separatorIdx != std::string::npos)
-							{
-								myrtille->clientWidth = stoi(commandArgs.substr(0, separatorIdx));
-								myrtille->clientHeight = stoi(commandArgs.substr(separatorIdx + 1, commandArgs.length() - separatorIdx - 1));
-							}
-							break;
-
-						// keystroke
-						case COMMAND::SEND_KEY_UNICODE:
-						case COMMAND::SEND_KEY_SCANCODE:
-							
-							args = split(commandArgs, '-');
-							if (args.size() >= 2)
-							{
-								std::string keyCode = args[0];
-								std::string pressed = args[1];
-
-								// character key
-								if (command == COMMAND::SEND_KEY_UNICODE)
-								{
-									if (wfc->context.input->UnicodeKeyboardEvent)
-										wfc->context.input->UnicodeKeyboardEvent(wfc->context.input, (pressed == "1" ? KBD_FLAGS_DOWN : KBD_FLAGS_RELEASE), atoi(keyCode.c_str()));
-								}
-								// non character key
-								else if (args.size() == 3)
-								{
-									std::string extend = args[2];
-									if (wfc->context.input->KeyboardEvent)
-										wfc->context.input->KeyboardEvent(wfc->context.input, (extend == "1" ? KBD_FLAGS_EXTENDED : 0) | (pressed == "1" ? KBD_FLAGS_DOWN : KBD_FLAGS_RELEASE), atoi(keyCode.c_str()));
-								}
-							}
-							break;
-
-						// mouse move
-						case COMMAND::SEND_MOUSE_MOVE:
-							processMouseInput(wfc, commandArgs, PTR_FLAGS_MOVE);
-							break;
-
-						// mouse left button
-						case COMMAND::SEND_MOUSE_LEFT_BUTTON:
-							processMouseInput(wfc, commandArgs.substr(1, commandArgs.length() - 1), commandArgs.substr(0, 1) == "0" ? PTR_FLAGS_BUTTON1 : PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON1);
-							break;
-
-						// mouse middle button
-						case COMMAND::SEND_MOUSE_MIDDLE_BUTTON:
-							processMouseInput(wfc, commandArgs.substr(1, commandArgs.length() - 1), commandArgs.substr(0, 1) == "0" ? PTR_FLAGS_BUTTON3 : PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON3);
-							break;
-
-						// mouse right button
-						case COMMAND::SEND_MOUSE_RIGHT_BUTTON:
-							processMouseInput(wfc, commandArgs.substr(1, commandArgs.length() - 1), commandArgs.substr(0, 1) == "0" ? PTR_FLAGS_BUTTON2 : PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON2);
-							break;
-
-						// mouse wheel up
-						case COMMAND::SEND_MOUSE_WHEEL_UP:
-							processMouseInput(wfc, commandArgs, PTR_FLAGS_WHEEL | 0x0078);
-							break;
-						
-						// mouse wheel down
-						case COMMAND::SEND_MOUSE_WHEEL_DOWN:
-							processMouseInput(wfc, commandArgs, PTR_FLAGS_WHEEL | PTR_FLAGS_WHEEL_NEGATIVE | 0x0088);
-							break;
-
-						// scale display
-						case COMMAND::SET_SCALE_DISPLAY:
-							myrtille->scaleDisplay = commandArgs != "0";
-							separatorIdx = commandArgs.find("x");
-							if (separatorIdx != std::string::npos)
-							{
-								myrtille->clientWidth = stoi(commandArgs.substr(0, separatorIdx));
-								myrtille->clientHeight = stoi(commandArgs.substr(separatorIdx + 1, commandArgs.length() - separatorIdx - 1));
-							}
-							sendMessage(wfc, "reload");
-							break;
-
-						// reconnect session
-						case COMMAND::SET_RECONNECT_SESSION:
-							// there are methods into freerdp to handle session reconnection but there are some issues with them
-							// reconnection is delegated to the gateway
-							sendMessage(wfc, "reload");
-							break;
-
-						// image encoding
-						case COMMAND::SET_IMAGE_ENCODING:
-							myrtille->imageEncoding = stoi(commandArgs);
-							myrtille->imageQuality = (int)IMAGE_QUALITY::HIGH;
-							break;
-
-						// image quality is tweaked depending on the available client bandwidth (low available bandwidth = quality tweaked down)
-						case COMMAND::SET_IMAGE_QUALITY:
-							myrtille->imageQuality = stoi(commandArgs);
-							break;
-
-						// like for image quality, it's interesting to tweak down the image quantity if the available bandwidth gets too low
-						// but skipping some images as well may also result in display inconsistencies, so be careful not to set it too low either (15 ips is a fair average in most cases)
-						// to circumvent such inconsistencies, the combination with adaptive fullscreen update is nice because the whole screen is refreshed after a small user idle time (1,5 sec by default)
-						case COMMAND::SET_IMAGE_QUANTITY:
-							myrtille->imageQuantity = stoi(commandArgs);
-							break;
-
-						// audio encoding is actually done by the gateway (using NAudio/Lame)
-						// it's not as critical as images for performance (should be used for notifications only)
-						// if needed, have the audio encoding into wfreerdp (Lame support can be enabled from cmake option)
-						case COMMAND::SET_AUDIO_FORMAT:
-							myrtille->audioFormat = stoi(commandArgs);
-							break;
-
-						// audio bitrate
-						case COMMAND::SET_AUDIO_BITRATE:
-							myrtille->audioBitrate = stoi(commandArgs);
-							break;
-
-						// screenshot config
-						case COMMAND::SET_SCREENSHOT_CONFIG:
-							args = split(commandArgs, '|');
-							if (args.size() == 3)
-							{
-								myrtille->screenshotIntervalSecs = stoi(args[0]);
-								myrtille->screenshotFormat = stoi(args[1]);
-								myrtille->screenshotPath = args[2];
-							}
-							break;
-
-						// start/stop taking screenshots
-						case COMMAND::START_TAKING_SCREENSHOTS:
-						case COMMAND::STOP_TAKING_SCREENSHOTS:
-							// these commands are handled by the gateway, by sending a TAKE_SCREENSHOT command periodically
-							// that way, each screenshot taken can be traced individually
-							break;
-
-						// take screenshot
-						case COMMAND::TAKE_SCREENSHOT:
-							myrtille->screenshotEnabled = true;
-							wf_myrtille_send_screen(wfc);
-							break;
-
-						// fullscreen update
-						case COMMAND::REQUEST_FULLSCREEN_UPDATE:
-							wf_myrtille_send_screen(wfc);
-							break;
-
-						// clipboard text
-						case COMMAND::REQUEST_REMOTE_CLIPBOARD:
-							if (myrtille->clipboardUpdated)
-							{
-								if (!wfc->cliprdr || !wfc->cliprdr->ClientFormatDataRequest)
-								{
-									WLog_INFO(TAG, "processInputsPipe: clipboard redirect is disabled, request cancelled");
-								}
-								else
-								{
-									CLIPRDR_FORMAT_DATA_REQUEST formatDataRequest;
-									formatDataRequest.requestedFormatId = CF_UNICODETEXT;
-									wfc->cliprdr->ClientFormatDataRequest(wfc->cliprdr, &formatDataRequest);
+									strncpy(wfc->context.settings->ServerHostname, commandArgs.c_str(), length);
+									wfc->context.settings->ServerHostname[length] = '\0';
 								}
 							}
 							else
 							{
-								sendMessage(wfc, myrtille->clipboardText);
+								wfc->context.settings->ServerHostname = _strdup(commandArgs.c_str());
 							}
-							break;
+						}
+						else /* ipv6 */
+						{
+							p2 = strchr(commandArgs.c_str(), ']');
 
-						// the standard way to close an rdp session is to logoff the user; an alternate way is to simply close the rdp client
-						// this disconnect the session, which is then subsequently closed (1 sec later if "MaxDisconnectionTime" = 1000 ms)
-						case COMMAND::CLOSE_CLIENT:
-							myrtille->processInputs = false;
-							break;
-					}
+							/* valid [] ipv6 addr found */
+							if (p2)
+							{
+								length = p2 - p;
+
+								if (wfc->context.settings->ServerHostname = (char*)calloc(length, sizeof(char)))
+								{
+									strncpy(wfc->context.settings->ServerHostname, p + 1, length - 1);
+
+									if (*(p2 + 1) == ':')
+									{
+										wfc->context.settings->ServerPort = atoi(&p2[2]);
+									}
+								}
+							}
+						}
+						break;
+
+					// hyper-v vm guid
+					case COMMAND::SEND_VM_GUID:
+						wfc->context.settings->VmConnectMode = TRUE;
+						wfc->context.settings->ServerPort = 2179;
+						wfc->context.settings->NegotiateSecurityLayer = FALSE;
+						wfc->context.settings->SendPreconnectionPdu = TRUE;
+						free(wfc->context.settings->PreconnectionBlob);
+						wfc->context.settings->PreconnectionBlob = _strdup(commandArgs.c_str());
+						break;
+
+					// user domain
+					case COMMAND::SEND_USER_DOMAIN:
+						free(wfc->context.settings->Domain);
+						wfc->context.settings->Domain = _strdup(commandArgs.c_str());
+						break;
+
+					// user name
+					case COMMAND::SEND_USER_NAME:
+						char* user;
+						user = _strdup(commandArgs.c_str());
+						if (user)
+						{
+							free(wfc->context.settings->Username);
+							if (!wfc->context.settings->Domain && user)
+							{
+								free(wfc->context.settings->Domain);
+								freerdp_parse_username(user, &wfc->context.settings->Username, &wfc->context.settings->Domain);
+								free(user);
+							}
+							else
+								wfc->context.settings->Username = user;
+						}
+						break;
+
+					// user password
+					case COMMAND::SEND_USER_PASSWORD:
+						free(wfc->context.settings->Password);
+						wfc->context.settings->Password = _strdup(commandArgs.c_str());
+						break;
+
+					// start program
+					case COMMAND::SEND_START_PROGRAM:
+						free(wfc->context.settings->AlternateShell);
+						wfc->context.settings->AlternateShell = _strdup(commandArgs.c_str());
+						break;
+
+					// connect rdp
+					case COMMAND::CONNECT_CLIENT:
+						DWORD threadId;
+						if (CreateThread(NULL, 0, wf_client_thread, (void*)wfc->context.instance, 0, &threadId) == NULL)
+						{
+							WLog_ERR(TAG, "processInputsPipe: CreateThread failed for wf_client_thread with error %d", GetLastError());
+						}
+						break;
+
+					// browser resize
+					case COMMAND::SEND_BROWSER_RESIZE:
+					    processResizeDisplay(wfc, commandArgs);
+					    sendMessage(wfc, L"reload");
+						break;
+
+					// browser pulse
+				    case COMMAND::SEND_BROWSER_PULSE:
+					    // this command is handled by the gateway to monitor browser activity
+					    break;
+
+					// keystroke
+					case COMMAND::SEND_KEY_UNICODE:
+					case COMMAND::SEND_KEY_SCANCODE:
+
+						args = split(commandArgs, '-');
+						if (args.size() >= 2)
+						{
+							std::string keyCode = args[0];
+							std::string pressed = args[1];
+
+							// character key
+							if (command == COMMAND::SEND_KEY_UNICODE)
+							{
+								if (wfc->context.input->UnicodeKeyboardEvent)
+									wfc->context.input->UnicodeKeyboardEvent(wfc->context.input, (pressed == "1" ? KBD_FLAGS_DOWN : KBD_FLAGS_RELEASE), atoi(keyCode.c_str()));
+							}
+							// non character key
+							else if (args.size() == 3)
+							{
+								std::string extend = args[2];
+								if (wfc->context.input->KeyboardEvent)
+									wfc->context.input->KeyboardEvent(wfc->context.input, (extend == "1" ? KBD_FLAGS_EXTENDED : 0) | (pressed == "1" ? KBD_FLAGS_DOWN : KBD_FLAGS_RELEASE), atoi(keyCode.c_str()));
+							}
+						}
+						break;
+
+					// mouse move
+					case COMMAND::SEND_MOUSE_MOVE:
+						processMouseInput(wfc, commandArgs, PTR_FLAGS_MOVE);
+						break;
+
+					// mouse left button
+					case COMMAND::SEND_MOUSE_LEFT_BUTTON:
+						processMouseInput(wfc, commandArgs.substr(1, commandArgs.length() - 1), commandArgs.substr(0, 1) == "0" ? PTR_FLAGS_BUTTON1 : PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON1);
+						break;
+
+					// mouse middle button
+					case COMMAND::SEND_MOUSE_MIDDLE_BUTTON:
+						processMouseInput(wfc, commandArgs.substr(1, commandArgs.length() - 1), commandArgs.substr(0, 1) == "0" ? PTR_FLAGS_BUTTON3 : PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON3);
+						break;
+
+					// mouse right button
+					case COMMAND::SEND_MOUSE_RIGHT_BUTTON:
+						processMouseInput(wfc, commandArgs.substr(1, commandArgs.length() - 1), commandArgs.substr(0, 1) == "0" ? PTR_FLAGS_BUTTON2 : PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON2);
+						break;
+
+					// mouse wheel up
+					case COMMAND::SEND_MOUSE_WHEEL_UP:
+						processMouseInput(wfc, commandArgs, PTR_FLAGS_WHEEL | 0x0078);
+						break;
+
+					// mouse wheel down
+					case COMMAND::SEND_MOUSE_WHEEL_DOWN:
+						processMouseInput(wfc, commandArgs, PTR_FLAGS_WHEEL | PTR_FLAGS_WHEEL_NEGATIVE | 0x0088);
+						break;
+
+					// scale display
+					case COMMAND::SET_SCALE_DISPLAY:
+						myrtille->scaleDisplay = commandArgs != "0";
+					    processResizeDisplay(wfc, commandArgs);
+						sendMessage(wfc, L"reload");
+						break;
+
+					// reconnect session
+					case COMMAND::SET_RECONNECT_SESSION:
+						// there are methods into freerdp to handle session reconnection but there are some issues with them
+						// reconnection is delegated to the gateway
+						sendMessage(wfc, L"reload");
+						break;
+
+					// image encoding
+					case COMMAND::SET_IMAGE_ENCODING:
+						myrtille->imageEncoding = stoi(commandArgs);
+						myrtille->imageQuality = (int)IMAGE_QUALITY::HIGH;
+						break;
+
+					// image quality is tweaked depending on the available client bandwidth (low available bandwidth = quality tweaked down)
+					case COMMAND::SET_IMAGE_QUALITY:
+						myrtille->imageQuality = stoi(commandArgs);
+						break;
+
+					// like for image quality, it's interesting to tweak down the image quantity if the available bandwidth gets too low
+					// but skipping some images as well may also result in display inconsistencies, so be careful not to set it too low either (15 ips is a fair average in most cases)
+					// to circumvent such inconsistencies, the combination with adaptive fullscreen update is nice because the whole screen is refreshed after a small user idle time (1,5 sec by default)
+					case COMMAND::SET_IMAGE_QUANTITY:
+						myrtille->imageQuantity = stoi(commandArgs);
+						break;
+
+					// audio encoding is actually done by the gateway (using NAudio/Lame)
+					// it's not as critical as images for performance (should be used for notifications only)
+					// if needed, have the audio encoding into wfreerdp (Lame support can be enabled from cmake option)
+					case COMMAND::SET_AUDIO_FORMAT:
+						myrtille->audioFormat = stoi(commandArgs);
+						break;
+
+					// audio bitrate
+					case COMMAND::SET_AUDIO_BITRATE:
+						myrtille->audioBitrate = stoi(commandArgs);
+						break;
+
+					// screenshot config
+					case COMMAND::SET_SCREENSHOT_CONFIG:
+						args = split(commandArgs, '|');
+						if (args.size() == 3)
+						{
+							myrtille->screenshotIntervalSecs = stoi(args[0]);
+							myrtille->screenshotFormat = stoi(args[1]);
+							myrtille->screenshotPath = args[2];
+						}
+						break;
+
+					// start/stop taking screenshots
+					case COMMAND::START_TAKING_SCREENSHOTS:
+					case COMMAND::STOP_TAKING_SCREENSHOTS:
+						// these commands are handled by the gateway, by sending a TAKE_SCREENSHOT command periodically
+						// that way, each screenshot taken can be traced individually
+						break;
+
+					// take screenshot
+					case COMMAND::TAKE_SCREENSHOT:
+						myrtille->screenshotEnabled = true;
+						wf_myrtille_send_screen(wfc);
+						break;
+
+					// fullscreen update
+					case COMMAND::REQUEST_FULLSCREEN_UPDATE:
+						wf_myrtille_send_screen(wfc);
+						break;
+
+					// client clipboard
+					case COMMAND::SEND_LOCAL_CLIPBOARD:
+						// convert to unicode and store the value
+						//myrtille->clipboardText = s2ws(commandArgs);
+
+						if (OpenClipboard(0))
+						{
+							WCHAR* clipboardText = NULL;
+							ConvertToUnicode(CP_UTF8, 0, commandArgs.c_str(), -1, &clipboardText, 0);
+							size_t bytesPerChar = sizeof(wchar_t);
+							size_t size = (wcslen(clipboardText) + 1) * bytesPerChar;
+							HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
+							memcpy(GlobalLock(hMem), clipboardText, size);
+							GlobalUnlock(hMem);
+							SetClipboardData(CF_UNICODETEXT, hMem);
+							CloseClipboard();
+						}
+
+						// the clipboard virtual channel is sometimes bugged (wfc->cliprdr is null; wfreerdp or rdp server issue?)
+						// I wasn't able to replicate the issue (had it once whith wfreerdp running under an account which is not member of the target domain, but then stopped to have it)
+						// if that happens, it's from the opening of the session and for its whole duration (disconnecting/reconnecting the session doesn't fix the issue, leaning more toward a server side issue)
+
+						// another issue is, the channel is opened (wfc->cliprdr is not null) but the copy & paste events don't fire (nothing is received on the channel!)
+
+						// in both cases, the only way is to sign out the session and open a new one
+
+						if (wfc->cliprdr != NULL)
+						{
+							// invalidate the server clipboard so that the next paste action will trigger the retrieval of the stored value
+							CLIPRDR_MONITOR_READY monitorReady;
+							monitorReady.msgType = CB_MONITOR_READY;
+							monitorReady.msgFlags = 0;
+							monitorReady.dataLen = 0;
+							wfc->cliprdr->MonitorReady(wfc->cliprdr, &monitorReady);
+						}
+						break;
+
+					// the standard way to close an rdp session is to logoff the user; an alternate way is to simply close the rdp client
+					// this disconnect the session, which is then subsequently closed (1 sec later if "MaxDisconnectionTime" = 1000 ms)
+					case COMMAND::CLOSE_CLIENT:
+						myrtille->processInputs = false;
+						break;
 				}
 			}
+
+			sizeHeader = !sizeHeader;
 		}
+
+		// cleanup
+		delete[] buffer;
+		buffer = NULL;
 	}
 
 	CloseHandle(myrtille->inputsPipe);
@@ -1300,6 +1399,34 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 	UINT32 exitCode = freerdp_get_last_error((rdpContext*)wfc);
 	exit(exitCode);
 	return 0;
+}
+
+void processResizeDisplay(wfContext* wfc, std::string args)
+{
+	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
+
+	int separatorIdx = args.find("x");
+	if (separatorIdx != std::string::npos)
+	{
+		int clientWidth = stoi(args.substr(0, separatorIdx));
+		int clientHeight = stoi(args.substr(separatorIdx + 1, args.length() - separatorIdx - 1));
+		float aspectRatio = (float)clientWidth / (float)clientHeight;
+		if (myrtille->aspectRatio == aspectRatio)
+		{
+			myrtille->clientWidth = clientWidth;
+			myrtille->clientHeight = clientHeight;
+		}
+		else if (myrtille->aspectRatio < aspectRatio)
+		{
+			myrtille->clientWidth = clientHeight * myrtille->aspectRatio;
+			myrtille->clientHeight = clientHeight;
+		}
+		else
+		{
+			myrtille->clientWidth = clientWidth;
+			myrtille->clientHeight = clientWidth / myrtille->aspectRatio;
+		}
+	}
 }
 
 void processMouseInput(wfContext* wfc, std::string input, UINT16 flags)
@@ -1342,26 +1469,42 @@ void processMouseInput(wfContext* wfc, std::string input, UINT16 flags)
 	}
 }
 
-void sendMessage(wfContext* wfc, std::string msg)
+void sendMessage(wfContext* wfc, std::wstring msg)
 {
 	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
 
-	// message size (4 bytes)
+	if (msg.length() == 0)
+		return;
+
+	// unicode is 2 bytes (16 bits) per character (UTF-16LE)
+	size_t bytesPerChar = sizeof(wchar_t);
+	
+	// message size in bytes
+	size_t size = msg.length() * bytesPerChar;
+
+	// size header (4 bytes)
 	byte* header = new byte[4];
-	int32ToBytes(msg.length(), 0, header);
+	int32ToBytes(size, 0, header);
 
 	// buffer
-	byte* buffer = new byte[msg.length() + 4];
+	byte* buffer = new byte[size + 4];
 	memcpy(buffer, header, 4);
-	memcpy(&buffer[4], msg.c_str(), msg.length());
+	memcpy(&buffer[4], msg.c_str(), size);
 
 	// send
-	DWORD bytesToWrite = msg.length() + 4;
+	DWORD bytesToWrite = size + 4;
 	DWORD bytesWritten;
 	if (WriteFile(myrtille->updatesPipe, buffer, bytesToWrite, &bytesWritten, NULL) == 0)
 	{
 		WLog_ERR(TAG, "sendMessage: WriteFile failed for message: %s with error %d", msg, GetLastError());
 	}
+
+	// cleanup
+	delete[] buffer;
+	buffer = NULL;
+
+	delete[] header;
+	header = NULL;
 }
 
 void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int right, int bottom, bool fullscreen)
@@ -1388,8 +1531,8 @@ void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int r
 
 	if (myrtille->imageEncoding == (int)IMAGE_ENCODING::PNG || myrtille->imageEncoding == (int)IMAGE_ENCODING::JPEG || myrtille->imageEncoding == (int)IMAGE_ENCODING::AUTO)
 	{
-		ULONG pngSize;
-		ULONG jpgSize;
+		ULONG pngSize = 0;
+		ULONG jpgSize = 0;
 
 		// --------------------------- convert the bitmap into PNG --------------------------------
 
@@ -1723,6 +1866,16 @@ void int32ToBytes(int value, int offset, byte* bytes)
 	bytes[offset + 1] = (value >> 8) & 0xFF;
 	bytes[offset + 2] = (value >> 16) & 0xFF;
 	bytes[offset + 3] = (value >> 24) & 0xFF;
+}
+
+int bytesToInt32(byte* bytes)
+{
+	// little endian
+	return int(
+		(bytes[0]) |
+		(bytes[1]) << 8 |
+		(bytes[2]) << 16 |
+		(bytes[3]) << 24);
 }
 
 void webPEncoder(wfContext* wfc, Gdiplus::Bitmap* bmp, int idx, IStream* stream, float quality, bool fullscreen)

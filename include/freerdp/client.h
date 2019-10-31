@@ -42,7 +42,7 @@ typedef int (*pRdpClientStop)(rdpContext* context);
 
 #pragma region Myrtille
 
-typedef void (*pRdpClientPrint)(rdpContext* context, char* printJobName);
+typedef void (*pRdpClientPrint)(rdpContext* context, wchar_t* printJobName);
 typedef void (*pRdpClientAudio)(rdpContext* context, const BYTE* data, size_t size);
 
 #pragma endregion

@@ -1256,7 +1256,7 @@ static int wfreerdp_client_stop(rdpContext* context)
 
 #pragma region Myrtille
 
-static void wfreerdp_client_print(rdpContext* context, char* printJobName)
+static void wfreerdp_client_print(rdpContext* context, wchar_t* printJobName)
 {
 	wfContext* wfc = (wfContext*)context;
 	wf_myrtille_send_printjob(wfc, printJobName);
