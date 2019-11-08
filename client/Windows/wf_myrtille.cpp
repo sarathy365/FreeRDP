@@ -378,7 +378,32 @@ void wf_myrtille_stop(wfContext* wfc)
 		return;
 
 	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
-	myrtille->processInputs = false;
+
+	// setting the exit condition for the process inputs loop is not enough
+	// "ReadFile" is synchronous; it waits for something to read on the file (or pipe) then return it
+	// problem is, it can wait for a long time if there is nothing to read!
+	// possibly, it will timeout or the pipe will be closed so it will return; but this is not something reliable...
+	// a better option would be to use an asynchronous call with an overlapped structure,
+	// but this is a more complex scenario and must be synchronized with the gateway (acting as pipes server),
+	// while we want simple FIFO queues to process the user inputs, display updates and other notifications in order
+
+	//myrtille->processInputs = false;
+
+	// also, closing the pipes at this step may result in errors if there are read/write operations going on in their own threads
+	// this will result in setting the exit condition for the process inputs loop, with the same comments as above
+	// additionally, the cleanup sequence may run twice, which could raise even more errors
+	// and finally have an unknown exit code for wfreerdp when it could be a simple disconnect from the start!
+	// the pipes will be anyway closed and released by the gateway (acting as pipes server), so there is nothing to worry from this side
+
+	//CloseHandle(myrtille->inputsPipe);
+	//CloseHandle(myrtille->updatesPipe);
+	//CloseHandle(myrtille->audioPipe);
+
+	Gdiplus::GdiplusShutdown(myrtille->gdiplusToken);
+	fclose(stdout);
+	fclose(stderr);
+	UINT32 exitCode = freerdp_get_last_error((rdpContext*)wfc);
+	exit(exitCode);
 }
 
 HANDLE wf_myrtille_connect(wfContext* wfc)
@@ -623,7 +648,8 @@ void wf_myrtille_send_cursor(wfContext* wfc)
 	UINT* bmpBits = (UINT*)bmpData->Scan0;
 	int stride = bmpData->Stride;
 
-	bool bmpOk = false;
+	bool bmpBitsTransparent = false;
+	bool bmpBitsColor = false;
 
 	// make the cursor transparent
 	for (int x = 0; x < bmpTransparentCursor->GetWidth(); x++)
@@ -641,16 +667,16 @@ void wf_myrtille_send_cursor(wfContext* wfc)
 			if (r == 0 && g == 0 && b == 255)
 			{
 				bmpBits[y * stride / 4 + x] = 0x00ffffff;
+				bmpBitsTransparent = true;
 			}
-			// for some reason, some cursors (like the text one) are yellow instead of black ?! switching color...
-			else if (r == 255 && g == 255 && b == 0)
-			{
-				bmpBits[y * stride / 4 + x] = 0xff000000;
-			}
-			// cursor is ok (contains black bit(s))
 			else
 			{
-				bmpOk = true;
+				// for some reason, some cursors (like the text one) are yellow instead of black ?! switching color...
+				if (r == 255 && g == 255 && b == 0)
+				{
+					bmpBits[y * stride / 4 + x] = 0xff000000;
+				}
+				bmpBitsColor = true;
 			}
 		}
 	}
@@ -658,8 +684,8 @@ void wf_myrtille_send_cursor(wfContext* wfc)
 	// unlock the cursor
 	bmpTransparentCursor->UnlockBits(bmpData);
 
-	// send the cursor only if ok
-	if (bmpOk)
+	// send the cursor only if it has a transparent mask and isn't empty
+	if (bmpBitsTransparent && bmpBitsColor)
 	{
 		// convert into PNG
 		IStream* pngStream;
@@ -1496,7 +1522,35 @@ void sendMessage(wfContext* wfc, std::wstring msg)
 	DWORD bytesWritten;
 	if (WriteFile(myrtille->updatesPipe, buffer, bytesToWrite, &bytesWritten, NULL) == 0)
 	{
-		WLog_ERR(TAG, "sendMessage: WriteFile failed for message: %s with error %d", msg, GetLastError());
+		switch (GetLastError())
+		{
+		case ERROR_INVALID_HANDLE:
+			WLog_ERR(TAG, "sendMessage: WriteFile failed with error ERROR_INVALID_HANDLE");
+			break;
+
+		case ERROR_PIPE_NOT_CONNECTED:
+			WLog_ERR(TAG, "sendMessage: WriteFile failed with error ERROR_PIPE_NOT_CONNECTED");
+			break;
+
+		case ERROR_PIPE_BUSY:
+			WLog_ERR(TAG, "sendMessage: WriteFile failed with error ERROR_PIPE_BUSY");
+			break;
+
+		case ERROR_BAD_PIPE:
+			WLog_ERR(TAG, "sendMessage: WriteFile failed with error ERROR_BAD_PIPE");
+			break;
+
+		case ERROR_BROKEN_PIPE:
+			WLog_ERR(TAG, "sendMessage: WriteFile failed with error ERROR_BROKEN_PIPE");
+			break;
+
+		default:
+			WLog_ERR(TAG, "sendMessage: WriteFile failed with error %d", GetLastError());
+			break;
+		}
+
+		// pipe problem; exit
+		myrtille->processInputs = false;
 	}
 
 	// cleanup
