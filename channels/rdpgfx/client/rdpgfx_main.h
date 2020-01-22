@@ -72,7 +72,7 @@ struct _RDPGFX_PLUGIN
 	ZGFX_CONTEXT* zgfx;
 	UINT32 UnacknowledgedFrames;
 	UINT32 TotalDecodedFrames;
-	UINT32 StartDecodingTime;
+	UINT64 StartDecodingTime;
 	BOOL suspendFrameAcks;
 	BOOL sendFrameAcks;
 
@@ -89,4 +89,3 @@ struct _RDPGFX_PLUGIN
 typedef struct _RDPGFX_PLUGIN RDPGFX_PLUGIN;
 
 #endif /* FREERDP_CHANNEL_RDPGFX_CLIENT_MAIN_H */
-

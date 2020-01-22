@@ -2,8 +2,7 @@
 #define TEST_SETTINGS_PROPERTY_LISTS
 
 #define have_bool_list_indices
-static const size_t bool_list_indices[] =
-{
+static const size_t bool_list_indices[] = {
 	FreeRDP_ServerMode,
 	FreeRDP_WaitForOutputBufferFlush,
 	FreeRDP_NetworkAutoDetect,
@@ -68,6 +67,7 @@ static const size_t bool_list_indices[] =
 	FreeRDP_MstscCookieMode,
 	FreeRDP_SendPreconnectionPdu,
 	FreeRDP_SmartcardLogon,
+	FreeRDP_PromptForCredentials,
 	FreeRDP_IgnoreCertificate,
 	FreeRDP_ExternalCertificateManagement,
 	FreeRDP_AutoAcceptCertificate,
@@ -164,18 +164,17 @@ static const size_t bool_list_indices[] =
 	FreeRDP_SupportGeometryTracking,
 	FreeRDP_SupportSSHAgentChannel,
 	FreeRDP_SupportVideoOptimized,
+	FreeRDP_TcpKeepAlive,
 };
 
 #define have_uint16_list_indices
-static const size_t uint16_list_indices[] =
-{
+static const size_t uint16_list_indices[] = {
 	FreeRDP_DesktopOrientation,
 	FreeRDP_ProxyPort,
 };
 
 #define have_uint32_list_indices
-static const size_t uint32_list_indices[] =
-{
+static const size_t uint32_list_indices[] = {
 	FreeRDP_ShareId,
 	FreeRDP_PduSource,
 	FreeRDP_ServerPort,
@@ -282,24 +281,25 @@ static const size_t uint32_list_indices[] =
 	FreeRDP_StaticChannelArraySize,
 	FreeRDP_DynamicChannelCount,
 	FreeRDP_DynamicChannelArraySize,
+	FreeRDP_TcpKeepAliveRetries,
+	FreeRDP_TcpKeepAliveDelay,
+	FreeRDP_TcpKeepAliveInterval,
+	FreeRDP_TcpAckTimeout,
 };
 
 #define have_int32_list_indices
-static const size_t int32_list_indices[] =
-{
+static const size_t int32_list_indices[] = {
 	FreeRDP_XPan,
 	FreeRDP_YPan,
 };
 
 #define have_uint64_list_indices
-static const size_t uint64_list_indices[] =
-{
+static const size_t uint64_list_indices[] = {
 	FreeRDP_ParentWindowId,
 };
 
 #define have_string_list_indices
-static const size_t string_list_indices[] =
-{
+static const size_t string_list_indices[] = {
 	FreeRDP_ServerHostname,
 	FreeRDP_Username,
 	FreeRDP_Password,
@@ -364,23 +364,12 @@ static const size_t string_list_indices[] =
 	FreeRDP_RemoteApplicationWorkingDir,
 	FreeRDP_ImeFileName,
 	FreeRDP_DrivesToRedirect,
+	FreeRDP_RDP2TCPArgs,
 };
 
 #define have_pointer_list_indices
-static const size_t pointer_list_indices[] =
-{
-	FreeRDP_StaticChannelArray,
-	FreeRDP_DynamicChannelArray,
+static const size_t pointer_list_indices[] = {
 	FreeRDP_instance,
-	FreeRDP_RdpServerCertificate,
-	FreeRDP_MonitorIds,
-	FreeRDP_TargetNetPorts,
-	FreeRDP_DeviceArray,
-	FreeRDP_ClientAutoReconnectCookie,
-	FreeRDP_TargetNetAddresses,
-	FreeRDP_MonitorDefArray,
-	FreeRDP_BitmapCacheV2CellInfo,
-	FreeRDP_ServerAutoReconnectCookie,
 	FreeRDP_ServerRandom,
 	FreeRDP_ServerCertificate,
 	FreeRDP_ClientRandom,
@@ -390,12 +379,22 @@ static const size_t pointer_list_indices[] =
 	FreeRDP_Password51,
 	FreeRDP_ReceivedCapabilities,
 	FreeRDP_OrderSupport,
+	FreeRDP_ChannelDefArray,
+	FreeRDP_MonitorDefArray,
+	FreeRDP_MonitorIds,
+	FreeRDP_TargetNetPorts,
+	FreeRDP_ClientAutoReconnectCookie,
+	FreeRDP_ServerAutoReconnectCookie,
+	FreeRDP_ClientTimeZone,
+	FreeRDP_TargetNetAddresses,
 	FreeRDP_RdpServerRsaKey,
+	FreeRDP_RdpServerCertificate,
+	FreeRDP_BitmapCacheV2CellInfo,
 	FreeRDP_GlyphCache,
 	FreeRDP_FragCache,
-	FreeRDP_ClientTimeZone,
-	FreeRDP_ChannelDefArray,
+	FreeRDP_DeviceArray,
+	FreeRDP_StaticChannelArray,
+	FreeRDP_DynamicChannelArray,
 };
 
 #endif /* TEST_SETTINGS_PROPERTY_LISTS */
-

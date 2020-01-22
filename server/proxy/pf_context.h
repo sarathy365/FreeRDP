@@ -25,14 +25,17 @@
 #include <freerdp/freerdp.h>
 #include <freerdp/channels/wtsvc.h>
 #include <freerdp/client/rdpei.h>
+#include <freerdp/client/rail.h>
+#include <freerdp/server/rail.h>
 #include <freerdp/client/rdpgfx.h>
 #include <freerdp/server/rdpgfx.h>
 #include <freerdp/client/disp.h>
 #include <freerdp/server/disp.h>
+#include <freerdp/server/cliprdr.h>
+#include <freerdp/server/rdpsnd.h>
 
 #include "pf_config.h"
 #include "pf_server.h"
-#include "pf_filters.h"
 
 typedef struct proxy_data proxyData;
 
@@ -41,18 +44,21 @@ typedef struct proxy_data proxyData;
  */
 struct p_server_context
 {
-	rdpContext _context;
+	rdpContext context;
 
 	proxyData* pdata;
 
 	HANDLE vcm;
-	HANDLE thread;
 	HANDLE dynvcReady;
 
+	RailServerContext* rail;
 	RdpgfxServerContext* gfx;
 	DispServerContext* disp;
+	CliprdrServerContext* cliprdr;
+	RdpsndServerContext* rdpsnd;
 
-	BOOL dispOpened;
+	/* used to external modules to store per-session info */
+	wHashTable* modules_info;
 };
 typedef struct p_server_context pServerContext;
 
@@ -61,13 +67,31 @@ typedef struct p_server_context pServerContext;
  */
 struct p_client_context
 {
-	rdpContext _context;
+	rdpContext context;
 
 	proxyData* pdata;
 
 	RdpeiClientContext* rdpei;
-	RdpgfxClientContext* gfx;
+	RdpgfxClientContext* gfx_proxy;
+	RdpgfxClientContext* gfx_decoder;
 	DispClientContext* disp;
+	CliprdrClientContext* cliprdr;
+	RailClientContext* rail;
+
+	/*
+	 * In a case when freerdp_connect fails,
+	 * Used for NLA fallback feature, to check if the server should close the connection.
+	 * When it is set to TRUE, proxy's client knows it shouldn't signal the server thread to closed
+	 * the connection when pf_client_post_disconnect is called, because it is trying to connect
+	 * reconnect without NLA. It must be set to TRUE before the first try, and to FALSE after the
+	 * connection fully established, to ensure graceful shutdown of the connection when it will be
+	 * closed.
+	 */
+	BOOL allow_next_conn_failure;
+
+	/* session capture */
+	char* frames_dir;
+	UINT64 frames_count;
 };
 typedef struct p_client_context pClientContext;
 
@@ -81,16 +105,19 @@ struct proxy_data
 	pServerContext* ps;
 	pClientContext* pc;
 
-	HANDLE connectionClosed;
-
-	connectionInfo* info;
-	filters_list* filters;
+	HANDLE abort_event;
+	HANDLE client_thread;
+	HANDLE gfx_server_ready;
 };
 
-BOOL init_p_server_context(freerdp_peer* client);
-rdpContext* p_client_context_create(rdpSettings* clientSettings);
-proxyData* proxy_data_new();
-BOOL proxy_data_set_connection_info(proxyData* pdata, rdpSettings* ps, rdpSettings* pc);
+BOOL pf_context_copy_settings(rdpSettings* dst, const rdpSettings* src);
+BOOL pf_context_init_server_context(freerdp_peer* client);
+pClientContext* pf_context_create_client_context(rdpSettings* clientSettings);
+
+proxyData* proxy_data_new(void);
 void proxy_data_free(proxyData* pdata);
+
+BOOL proxy_data_shall_disconnect(proxyData* pdata);
+void proxy_data_abort_connect(proxyData* pdata);
 
 #endif /* FREERDP_SERVER_PROXY_PFCONTEXT_H */

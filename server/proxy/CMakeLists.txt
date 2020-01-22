@@ -3,7 +3,8 @@
 #
 # Copyright 2019 Mati Shabtay <matishabtay@gmail.com>
 # Copyright 2019 Kobi Mizrachi <kmizrachi18@gmail.com>
-#
+# Copyright 2019 Idan Freiberg <speidy@gmail.com>
+
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -31,23 +32,30 @@ set(${MODULE_PREFIX}_SRCS
   pf_input.h
   pf_update.c
   pf_update.h
+  pf_rail.c
+  pf_rail.h
   pf_rdpgfx.c
   pf_rdpgfx.h
   pf_disp.c
   pf_disp.h
   pf_server.c
   pf_server.h
-  pf_common.c
-  pf_common.h
   pf_gdi.c
   pf_gdi.h
   pf_config.c
   pf_config.h
   pf_graphics.c
   pf_graphics.h
-  pf_filters.c
-  pf_filters.h
-  pf_log.h)
+  pf_modules.c
+  pf_modules.h
+  pf_cliprdr.c
+  pf_cliprdr.h
+  pf_rdpsnd.c
+  pf_rdpsnd.h
+  pf_capture.c
+  pf_capture.h
+  pf_log.h
+  )
 
 # On windows create dll version information.
 # Vendor, product and year are already set in top level CMakeLists.txt
@@ -69,6 +77,7 @@ add_executable(${MODULE_NAME} ${${MODULE_PREFIX}_SRCS})
 
 set(${MODULE_PREFIX}_LIBS ${${MODULE_PREFIX}_LIBS} freerdp-server)
 set(${MODULE_PREFIX}_LIBS ${${MODULE_PREFIX}_LIBS} freerdp-client)
+set(${MODULE_PREFIX}_LIBS ${${MODULE_PREFIX}_LIBS} rdpgfx-client)
 set(${MODULE_PREFIX}_LIBS ${${MODULE_PREFIX}_LIBS} winpr freerdp)
 
 target_link_libraries(${MODULE_NAME} ${${MODULE_PREFIX}_LIBS})
@@ -79,4 +88,4 @@ endif()
 
 set_property(TARGET ${MODULE_NAME} PROPERTY FOLDER "Server/proxy")
 
-add_subdirectory("filters")
+add_subdirectory("modules")

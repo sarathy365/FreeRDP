@@ -65,29 +65,25 @@ struct rdp_nego
 	rdpTransport* transport;
 };
 
-static const char* const NEGO_STATE_STRINGS[] =
+static const char* nego_state_string(NEGO_STATE state)
 {
-	"NEGO_STATE_INITIAL",
-	"NEGO_STATE_EXT",
-	"NEGO_STATE_NLA",
-	"NEGO_STATE_TLS",
-	"NEGO_STATE_RDP",
-	"NEGO_STATE_FAIL",
-	"NEGO_STATE_FINAL"
-};
+	static const char* const NEGO_STATE_STRINGS[] = { "NEGO_STATE_INITIAL", "NEGO_STATE_EXT",
+		                                              "NEGO_STATE_NLA",     "NEGO_STATE_TLS",
+		                                              "NEGO_STATE_RDP",     "NEGO_STATE_FAIL",
+		                                              "NEGO_STATE_FINAL",   "NEGO_STATE_INVALID" };
+	if (state >= ARRAYSIZE(NEGO_STATE_STRINGS))
+		return NEGO_STATE_STRINGS[ARRAYSIZE(NEGO_STATE_STRINGS) - 1];
+	return NEGO_STATE_STRINGS[state];
+}
 
-static const char PROTOCOL_SECURITY_STRINGS[9][4] =
+static const char* protocol_security_string(UINT32 security)
 {
-	"RDP",
-	"TLS",
-	"NLA",
-	"UNK",
-	"UNK",
-	"UNK",
-	"UNK",
-	"UNK",
-	"EXT"
-};
+	static const char* PROTOCOL_SECURITY_STRINGS[] = { "RDP", "TLS", "NLA", "UNK", "UNK",
+		                                               "UNK", "UNK", "UNK", "EXT", "UNK" };
+	if (security >= ARRAYSIZE(PROTOCOL_SECURITY_STRINGS))
+		return PROTOCOL_SECURITY_STRINGS[ARRAYSIZE(PROTOCOL_SECURITY_STRINGS) - 1];
+	return PROTOCOL_SECURITY_STRINGS[security];
+}
 
 static BOOL nego_transport_connect(rdpNego* nego);
 static BOOL nego_transport_disconnect(rdpNego* nego);
@@ -185,7 +181,7 @@ BOOL nego_connect(rdpNego* nego)
 	{
 		do
 		{
-			WLog_DBG(TAG, "state: %s", NEGO_STATE_STRINGS[nego->state]);
+			WLog_DBG(TAG, "state: %s", nego_state_string(nego->state));
 			nego_send(nego);
 
 			if (nego->state == NEGO_STATE_FAIL)
@@ -196,11 +192,10 @@ BOOL nego_connect(rdpNego* nego)
 				nego->state = NEGO_STATE_FINAL;
 				return FALSE;
 			}
-		}
-		while (nego->state != NEGO_STATE_FINAL);
+		} while (nego->state != NEGO_STATE_FINAL);
 	}
 
-	WLog_DBG(TAG, "Negotiated %s security", PROTOCOL_SECURITY_STRINGS[nego->SelectedProtocol]);
+	WLog_DBG(TAG, "Negotiated %s security", protocol_security_string(nego->SelectedProtocol));
 	/* update settings with negotiated protocol security */
 	settings->RequestedProtocols = nego->RequestedProtocols;
 	settings->SelectedProtocol = nego->SelectedProtocol;
@@ -225,7 +220,7 @@ BOOL nego_connect(rdpNego* nego)
 	if (!nego_security_connect(nego))
 	{
 		WLog_DBG(TAG, "Failed to connect with %s security",
-		         PROTOCOL_SECURITY_STRINGS[nego->SelectedProtocol]);
+		         protocol_security_string(nego->SelectedProtocol));
 		return FALSE;
 	}
 
@@ -264,7 +259,8 @@ BOOL nego_security_connect(rdpNego* nego)
 		}
 		else
 		{
-			WLog_ERR(TAG, "cannot connect security layer because no protocol has been selected yet.");
+			WLog_ERR(TAG,
+			         "cannot connect security layer because no protocol has been selected yet.");
 		}
 	}
 
@@ -286,16 +282,19 @@ static BOOL nego_tcp_connect(rdpNego* nego)
 			if (nego->GatewayBypassLocal)
 			{
 				/* Attempt a direct connection first, and then fallback to using the gateway */
-				WLog_INFO(TAG, "Detecting if host can be reached locally. - This might take some time.");
+				WLog_INFO(TAG,
+				          "Detecting if host can be reached locally. - This might take some time.");
 				WLog_INFO(TAG, "To disable auto detection use /gateway-usage-method:direct");
 				transport_set_gateway_enabled(nego->transport, FALSE);
-				nego->TcpConnected = transport_connect(nego->transport, nego->hostname, nego->port, 1);
+				nego->TcpConnected =
+				    transport_connect(nego->transport, nego->hostname, nego->port, 1);
 			}
 
 			if (!nego->TcpConnected)
 			{
 				transport_set_gateway_enabled(nego->transport, TRUE);
-				nego->TcpConnected = transport_connect(nego->transport, nego->hostname, nego->port, 15);
+				nego->TcpConnected =
+				    transport_connect(nego->transport, nego->hostname, nego->port, 15);
 			}
 		}
 		else
@@ -362,7 +361,7 @@ BOOL nego_send_preconnection_pdu(rdpNego* nego)
 
 	if (nego->PreconnectionBlob)
 	{
-		cchPCB = (UINT16) ConvertToUnicode(CP_UTF8, 0, nego->PreconnectionBlob, -1, &wszPCB, 0);
+		cchPCB = (UINT16)ConvertToUnicode(CP_UTF8, 0, nego->PreconnectionBlob, -1, &wszPCB, 0);
 		cchPCB += 1; /* zero-termination */
 		cbSize += cchPCB * 2;
 	}
@@ -376,11 +375,11 @@ BOOL nego_send_preconnection_pdu(rdpNego* nego)
 		return FALSE;
 	}
 
-	Stream_Write_UINT32(s, cbSize); /* cbSize */
-	Stream_Write_UINT32(s, 0); /* Flags */
-	Stream_Write_UINT32(s, PRECONNECTION_PDU_V2); /* Version */
+	Stream_Write_UINT32(s, cbSize);                /* cbSize */
+	Stream_Write_UINT32(s, 0);                     /* Flags */
+	Stream_Write_UINT32(s, PRECONNECTION_PDU_V2);  /* Version */
 	Stream_Write_UINT32(s, nego->PreconnectionId); /* Id */
-	Stream_Write_UINT16(s, cchPCB); /* cchPCB */
+	Stream_Write_UINT16(s, cchPCB);                /* cchPCB */
 
 	if (wszPCB)
 	{
@@ -428,7 +427,7 @@ static void nego_attempt_ext(rdpNego* nego)
 		return;
 	}
 
-	WLog_DBG(TAG, "state: %s", NEGO_STATE_STRINGS[nego->state]);
+	WLog_DBG(TAG, "state: %s", nego_state_string(nego->state));
 
 	if (nego->state != NEGO_STATE_FINAL)
 	{
@@ -473,7 +472,7 @@ static void nego_attempt_nla(rdpNego* nego)
 		return;
 	}
 
-	WLog_DBG(TAG, "state: %s", NEGO_STATE_STRINGS[nego->state]);
+	WLog_DBG(TAG, "state: %s", nego_state_string(nego->state));
 
 	if (nego->state != NEGO_STATE_FINAL)
 	{
@@ -603,7 +602,7 @@ int nego_recv(rdpTransport* transport, wStream* s, void* extra)
 	BYTE li;
 	BYTE type;
 	UINT16 length;
-	rdpNego* nego = (rdpNego*) extra;
+	rdpNego* nego = (rdpNego*)extra;
 
 	if (!tpkt_read_header(s, &length))
 		return -1;
@@ -623,7 +622,7 @@ int nego_recv(rdpTransport* transport, wStream* s, void* extra)
 		{
 			case TYPE_RDP_NEG_RSP:
 				nego_process_negotiation_response(nego, s);
-				WLog_DBG(TAG, "selected_protocol: %"PRIu32"", nego->SelectedProtocol);
+				WLog_DBG(TAG, "selected_protocol: %" PRIu32 "", nego->SelectedProtocol);
 
 				/* enhanced security selected ? */
 
@@ -671,7 +670,6 @@ int nego_recv(rdpTransport* transport, wStream* s, void* extra)
 	return 0;
 }
 
-
 /**
  * Read optional routing token or cookie of X.224 Connection Request PDU.
  * @msdn{cc240470}
@@ -697,11 +695,12 @@ static BOOL nego_read_request_token_or_cookie(rdpNego* nego, wStream* s)
 	size_t pos, len;
 	BOOL result = FALSE;
 	BOOL isToken = FALSE;
+	size_t remain = Stream_GetRemainingLength(s);
 	str = Stream_Pointer(s);
 	pos = Stream_GetPosition(s);
 
 	/* minimum length for token is 15 */
-	if (Stream_GetRemainingLength(s) < 15)
+	if (remain < 15)
 		return TRUE;
 
 	if (memcmp(Stream_Pointer(s), "Cookie: mstshash=", 17) != 0)
@@ -711,13 +710,13 @@ static BOOL nego_read_request_token_or_cookie(rdpNego* nego, wStream* s)
 	else
 	{
 		/* not a token, minimum length for cookie is 19 */
-		if (Stream_GetRemainingLength(s) < 19)
+		if (remain < 19)
 			return TRUE;
 
 		Stream_Seek(s, 17);
 	}
 
-	while (Stream_GetRemainingLength(s) >= 2)
+	while ((remain = Stream_GetRemainingLength(s)) >= 2)
 	{
 		Stream_Read_UINT16(s, crlf);
 
@@ -731,9 +730,10 @@ static BOOL nego_read_request_token_or_cookie(rdpNego* nego, wStream* s)
 	{
 		Stream_Rewind(s, 2);
 		len = Stream_GetPosition(s) - pos;
+		remain = Stream_GetRemainingLength(s);
 		Stream_Write_UINT16(s, 0);
 
-		if (strlen((char*)str) == len)
+		if (strnlen((char*)str, len) == len)
 		{
 			if (isToken)
 				result = nego_set_routing_token(nego, str, len);
@@ -745,13 +745,11 @@ static BOOL nego_read_request_token_or_cookie(rdpNego* nego, wStream* s)
 	if (!result)
 	{
 		Stream_SetPosition(s, pos);
-		WLog_ERR(TAG, "invalid %s received",
-		         isToken ? "routing token" : "cookie");
+		WLog_ERR(TAG, "invalid %s received", isToken ? "routing token" : "cookie");
 	}
 	else
 	{
-		WLog_DBG(TAG, "received %s [%s]",
-		         isToken ? "routing token" : "cookie", str);
+		WLog_DBG(TAG, "received %s [%s]", isToken ? "routing token" : "cookie", str);
 	}
 
 	return result;
@@ -794,7 +792,7 @@ BOOL nego_read_request(rdpNego* nego, wStream* s)
 
 		if (type != TYPE_RDP_NEG_REQ)
 		{
-			WLog_ERR(TAG, "Incorrect negotiation request type %"PRIu8"", type);
+			WLog_ERR(TAG, "Incorrect negotiation request type %" PRIu8 "", type);
 			return FALSE;
 		}
 
@@ -879,13 +877,13 @@ BOOL nego_send_negotiation_request(rdpNego* nego)
 			cookie_length = nego->CookieMaxLength;
 
 		Stream_Write(s, "Cookie: mstshash=", 17);
-		Stream_Write(s, (BYTE*) nego->cookie, cookie_length);
+		Stream_Write(s, (BYTE*)nego->cookie, cookie_length);
 		Stream_Write_UINT8(s, 0x0D); /* CR */
 		Stream_Write_UINT8(s, 0x0A); /* LF */
 		length += cookie_length + 19;
 	}
 
-	WLog_DBG(TAG, "RequestedProtocols: %"PRIu32"", nego->RequestedProtocols);
+	WLog_DBG(TAG, "RequestedProtocols: %" PRIu32 "", nego->RequestedProtocols);
 
 	if ((nego->RequestedProtocols > PROTOCOL_RDP) || (nego->sendNegoData))
 	{
@@ -895,12 +893,12 @@ BOOL nego_send_negotiation_request(rdpNego* nego)
 
 		Stream_Write_UINT8(s, TYPE_RDP_NEG_REQ);
 		Stream_Write_UINT8(s, flags);
-		Stream_Write_UINT16(s, 8); /* RDP_NEG_DATA length (8) */
+		Stream_Write_UINT16(s, 8);                        /* RDP_NEG_DATA length (8) */
 		Stream_Write_UINT32(s, nego->RequestedProtocols); /* requestedProtocols */
 		length += 8;
 	}
 
-	if ((length < 5) || (length > UINT16_MAX))
+	if (length > UINT16_MAX)
 		goto fail;
 
 	em = Stream_GetPosition(s);
@@ -928,7 +926,7 @@ void nego_process_negotiation_request(rdpNego* nego, wStream* s)
 	Stream_Read_UINT8(s, flags);
 	Stream_Read_UINT16(s, length);
 	Stream_Read_UINT32(s, nego->RequestedProtocols);
-	WLog_DBG(TAG, "RDP_NEG_REQ: RequestedProtocol: 0x%08"PRIX32"", nego->RequestedProtocols);
+	WLog_DBG(TAG, "RDP_NEG_REQ: RequestedProtocol: 0x%08" PRIX32 "", nego->RequestedProtocols);
 	nego->state = NEGO_STATE_FINAL;
 }
 
@@ -997,7 +995,7 @@ void nego_process_negotiation_failure(rdpNego* nego, wStream* s)
 			break;
 
 		default:
-			WLog_ERR(TAG, "Error: Unknown protocol security error %"PRIu32"", failureCode);
+			WLog_ERR(TAG, "Error: Unknown protocol security error %" PRIu32 "", failureCode);
 			break;
 	}
 
@@ -1037,7 +1035,7 @@ BOOL nego_send_negotiation_response(rdpNego* nego)
 		flags = 0;
 		Stream_Write_UINT8(s, TYPE_RDP_NEG_FAILURE);
 		Stream_Write_UINT8(s, flags); /* flags */
-		Stream_Write_UINT16(s, 8); /* RDP_NEG_DATA length (8) */
+		Stream_Write_UINT16(s, 8);    /* RDP_NEG_DATA length (8) */
 		Stream_Write_UINT32(s, errorCode);
 		length += 8;
 		status = FALSE;
@@ -1051,8 +1049,8 @@ BOOL nego_send_negotiation_response(rdpNego* nego)
 
 		/* RDP_NEG_DATA must be present for TLS, NLA, and RDP */
 		Stream_Write_UINT8(s, TYPE_RDP_NEG_RSP);
-		Stream_Write_UINT8(s, flags); /* flags */
-		Stream_Write_UINT16(s, 8); /* RDP_NEG_DATA length (8) */
+		Stream_Write_UINT8(s, flags);                   /* flags */
+		Stream_Write_UINT16(s, 8);                      /* RDP_NEG_DATA length (8) */
 		Stream_Write_UINT32(s, nego->SelectedProtocol); /* selectedProtocol */
 		length += 8;
 	}
@@ -1156,7 +1154,7 @@ void nego_init(rdpNego* nego)
 
 rdpNego* nego_new(rdpTransport* transport)
 {
-	rdpNego* nego = (rdpNego*) calloc(1, sizeof(rdpNego));
+	rdpNego* nego = (rdpNego*)calloc(1, sizeof(rdpNego));
 
 	if (!nego)
 		return NULL;
@@ -1201,24 +1199,28 @@ BOOL nego_set_target(rdpNego* nego, const char* hostname, UINT16 port)
 /**
  * Enable security layer negotiation.
  * @param nego pointer to the negotiation structure
- * @param enable_rdp whether to enable security layer negotiation (TRUE for enabled, FALSE for disabled)
+ * @param enable_rdp whether to enable security layer negotiation (TRUE for enabled, FALSE for
+ * disabled)
  */
 
 void nego_set_negotiation_enabled(rdpNego* nego, BOOL NegotiateSecurityLayer)
 {
-	WLog_DBG(TAG, "Enabling security layer negotiation: %s", NegotiateSecurityLayer ? "TRUE" : "FALSE");
+	WLog_DBG(TAG, "Enabling security layer negotiation: %s",
+	         NegotiateSecurityLayer ? "TRUE" : "FALSE");
 	nego->NegotiateSecurityLayer = NegotiateSecurityLayer;
 }
 
 /**
  * Enable restricted admin mode.
  * @param nego pointer to the negotiation structure
- * @param enable_restricted whether to enable security layer negotiation (TRUE for enabled, FALSE for disabled)
+ * @param enable_restricted whether to enable security layer negotiation (TRUE for enabled, FALSE
+ * for disabled)
  */
 
 void nego_set_restricted_admin_mode_required(rdpNego* nego, BOOL RestrictedAdminModeRequired)
 {
-	WLog_DBG(TAG, "Enabling restricted admin mode: %s", RestrictedAdminModeRequired ? "TRUE" : "FALSE");
+	WLog_DBG(TAG, "Enabling restricted admin mode: %s",
+	         RestrictedAdminModeRequired ? "TRUE" : "FALSE");
 	nego->RestrictedAdminModeRequired = RestrictedAdminModeRequired;
 }
 
@@ -1259,7 +1261,8 @@ void nego_enable_tls(rdpNego* nego, BOOL enable_tls)
 /**
  * Enable NLA security protocol.
  * @param nego pointer to the negotiation structure
- * @param enable_nla whether to enable network level authentication protocol (TRUE for enabled, FALSE for disabled)
+ * @param enable_nla whether to enable network level authentication protocol (TRUE for enabled,
+ * FALSE for disabled)
  */
 
 void nego_enable_nla(rdpNego* nego, BOOL enable_nla)
@@ -1271,7 +1274,8 @@ void nego_enable_nla(rdpNego* nego, BOOL enable_nla)
 /**
  * Enable NLA extended security protocol.
  * @param nego pointer to the negotiation structure
- * @param enable_ext whether to enable network level authentication extended protocol (TRUE for enabled, FALSE for disabled)
+ * @param enable_ext whether to enable network level authentication extended protocol (TRUE for
+ * enabled, FALSE for disabled)
  */
 
 void nego_enable_ext(rdpNego* nego, BOOL enable_ext)
@@ -1294,7 +1298,7 @@ BOOL nego_set_routing_token(rdpNego* nego, BYTE* RoutingToken, DWORD RoutingToke
 
 	free(nego->RoutingToken);
 	nego->RoutingTokenLength = RoutingTokenLength;
-	nego->RoutingToken = (BYTE*) malloc(nego->RoutingTokenLength);
+	nego->RoutingToken = (BYTE*)malloc(nego->RoutingTokenLength);
 
 	if (!nego->RoutingToken)
 		return FALSE;
@@ -1396,7 +1400,6 @@ UINT32 nego_get_requested_protocols(rdpNego* nego)
 
 	return nego->RequestedProtocols;
 }
-
 
 BOOL nego_set_requested_protocols(rdpNego* nego, UINT32 RequestedProtocols)
 {

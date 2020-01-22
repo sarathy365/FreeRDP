@@ -72,7 +72,7 @@ int ListDictionary_Count(wListDictionary* listDictionary)
  * Gets a value indicating whether the ListDictionary has a fixed size.
  */
 
-BOOL ListDictionary_IsFixedSized(wListDictionary* listDictionary)
+static BOOL ListDictionary_IsFixedSized(wListDictionary* listDictionary)
 {
 	return FALSE;
 }
@@ -81,7 +81,7 @@ BOOL ListDictionary_IsFixedSized(wListDictionary* listDictionary)
  * Gets a value indicating whether the ListDictionary is read-only.
  */
 
-BOOL ListDictionary_IsReadOnly(wListDictionary* listDictionary)
+static BOOL ListDictionary_IsReadOnly(wListDictionary* listDictionary)
 {
 	return FALSE;
 }
@@ -90,7 +90,7 @@ BOOL ListDictionary_IsReadOnly(wListDictionary* listDictionary)
  * Gets a value indicating whether the ListDictionary is synchronized (thread safe).
  */
 
-BOOL ListDictionary_IsSynchronized(wListDictionary* listDictionary)
+static BOOL ListDictionary_IsSynchronized(wListDictionary* listDictionary)
 {
 	return listDictionary->synchronized;
 }
@@ -155,7 +155,7 @@ int ListDictionary_GetKeys(wListDictionary* listDictionary, ULONG_PTR** ppKeys)
 
 	if (count)
 	{
-		pKeys = (ULONG_PTR*) calloc(count, sizeof(ULONG_PTR));
+		pKeys = (ULONG_PTR*)calloc(count, sizeof(ULONG_PTR));
 
 		if (!pKeys)
 		{
@@ -174,7 +174,7 @@ int ListDictionary_GetKeys(wListDictionary* listDictionary, ULONG_PTR** ppKeys)
 
 		while (item)
 		{
-			pKeys[index++] = (ULONG_PTR) item->key;
+			pKeys[index++] = (ULONG_PTR)item->key;
 			item = item->next;
 		}
 	}
@@ -203,7 +203,7 @@ BOOL ListDictionary_Add(wListDictionary* listDictionary, const void* key, void* 
 	if (listDictionary->synchronized)
 		EnterCriticalSection(&listDictionary->lock);
 
-	item = (wListDictionaryItem*) malloc(sizeof(wListDictionaryItem));
+	item = (wListDictionaryItem*)malloc(sizeof(wListDictionaryItem));
 
 	if (!item)
 		goto out_error;
@@ -478,7 +478,7 @@ static BOOL default_equal_function(const void* obj1, const void* obj2)
 wListDictionary* ListDictionary_New(BOOL synchronized)
 {
 	wListDictionary* listDictionary = NULL;
-	listDictionary = (wListDictionary*) calloc(1, sizeof(wListDictionary));
+	listDictionary = (wListDictionary*)calloc(1, sizeof(wListDictionary));
 
 	if (!listDictionary)
 		return NULL;
@@ -505,4 +505,3 @@ void ListDictionary_Free(wListDictionary* listDictionary)
 		free(listDictionary);
 	}
 }
-

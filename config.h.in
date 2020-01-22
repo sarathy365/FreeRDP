@@ -36,6 +36,7 @@
 #cmakedefine WITH_SSE2
 #cmakedefine WITH_NEON
 #cmakedefine WITH_IPP
+#cmakedefine WITH_CUPS
 #cmakedefine WITH_NATIVE_SSPI
 #cmakedefine WITH_JPEG
 #cmakedefine WITH_WIN8
@@ -65,6 +66,7 @@
 #cmakedefine WITH_DSP_EXPERIMENTAL
 #cmakedefine WITH_DSP_FFMPEG
 #cmakedefine WITH_X264
+#cmakedefine WITH_OPENCL
 #cmakedefine WITH_MEDIA_FOUNDATION
 
 #cmakedefine WITH_VAAPI
@@ -168,4 +170,5 @@
 #cmakedefine WITH_DEBUG_X11_LOCAL_MOVESIZE
 #cmakedefine WITH_DEBUG_XV
 #cmakedefine WITH_DEBUG_RINGBUFFER
+
 #endif /* FREERDP_CONFIG_H */

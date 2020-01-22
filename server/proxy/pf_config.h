@@ -2,7 +2,6 @@
  * FreeRDP: A Remote Desktop Protocol Implementation
  * FreeRDP Proxy Server
  *
- * Copyright 2019 Mati Shabtay <matishabtay@gmail.com>
  * Copyright 2019 Kobi Mizrachi <kmizrachi18@gmail.com>
  * Copyright 2019 Idan Freiberg <speidy@gmail.com>
  *
@@ -22,52 +21,63 @@
 #ifndef FREERDP_SERVER_PROXY_PFCONFIG_H
 #define FREERDP_SERVER_PROXY_PFCONFIG_H
 
-#define CONFIG_PARSE_SUCCESS 0
-#define CONFIG_PARSE_ERROR 	 1
-#define CONFIG_INVALID 		 2
-
+#include <freerdp/api.h>
 #include <winpr/ini.h>
+#include <winpr/path.h>
 
-#include "pf_filters.h"
+typedef struct proxy_config proxyConfig;
 
 struct proxy_config
 {
 	/* server */
 	char* Host;
 	UINT16 Port;
-	BOOL  LocalOnly;
 
 	/* target */
 	BOOL UseLoadBalanceInfo;
 	char* TargetHost;
 	UINT16 TargetPort;
 
-	/* graphics */
-	BOOL GFX;
-	BOOL BitmapUpdate;
-
 	/* input */
 	BOOL Keyboard;
 	BOOL Mouse;
 
-	/* security */
-	BOOL NlaSecurity;
-	BOOL TlsSecurity;
-	BOOL RdpSecurity;
+	/* server security */
+	BOOL ServerTlsSecurity;
+	BOOL ServerRdpSecurity;
+
+	/* client security */
+	BOOL ClientNlaSecurity;
+	BOOL ClientTlsSecurity;
+	BOOL ClientRdpSecurity;
 
 	/* channels */
-	BOOL WhitelistMode;
+	BOOL GFX;
+	BOOL DisplayControl;
+	BOOL Clipboard;
+	BOOL AudioOutput;
+	BOOL RemoteApp;
 
-	wArrayList* AllowedChannels;
-	wArrayList* BlockedChannels;
+	/* clipboard specific settings */
+	BOOL TextOnly;
+	UINT32 MaxTextLength;
 
-	/* filters */
-	filters_list* Filters;
+	/* session capture */
+	BOOL SessionCapture;
+	char* CapturesDirectory;
 };
 
 typedef struct proxy_config proxyConfig;
 
-DWORD pf_server_load_config(const char* path, proxyConfig* config);
+FREERDP_API BOOL pf_config_get_uint16(wIniFile* ini, const char* section, const char* key,
+                                      UINT16* result);
+FREERDP_API BOOL pf_config_get_uint32(wIniFile* ini, const char* section, const char* key,
+                                      UINT32* result);
+FREERDP_API BOOL pf_config_get_bool(wIniFile* ini, const char* section, const char* key);
+FREERDP_API const char* pf_config_get_str(wIniFile* ini, const char* section, const char* key);
+
+BOOL pf_server_config_load(const char* path, proxyConfig* config);
+void pf_server_config_print(proxyConfig* config);
 void pf_server_config_free(proxyConfig* config);
 
 #endif /* FREERDP_SERVER_PROXY_PFCONFIG_H */

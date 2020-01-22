@@ -53,7 +53,7 @@ int main(int argc, char* argv[])
 		return 1;
 
 	settings = context->settings;
-	xfc = (xfContext*) context;
+	xfc = (xfContext*)context;
 
 	status = freerdp_client_settings_parse_command_line(context->settings, argc, argv, FALSE);
 
@@ -61,11 +61,14 @@ int main(int argc, char* argv[])
 
 	if (status)
 	{
-		if (settings->ListMonitors)
+		BOOL list = settings->ListMonitors;
+		if (list)
 			xf_list_monitors(xfc);
 
 		freerdp_client_context_free(context);
-		return 0;
+		if (list)
+			return 0;
+		return status;
 	}
 
 	freerdp_client_start(context);

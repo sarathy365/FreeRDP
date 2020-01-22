@@ -8,6 +8,10 @@
  * Copyright 2015 DI (FH) Martin Haimberger <martin.haimberger@thincast.com>
  * Copyright 2016 David PHAM-VAN <d.phamvan@inuvika.com>
  *
+ * Myrtille: A native HTML4/5 Remote Desktop Protocol client
+ *
+ * Copyright(c) 2014-2020 Cedric Coste
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -34,11 +38,14 @@
 
 #include <winpr/crt.h>
 #include <winpr/cmdline.h>
+#include <winpr/sysinfo.h>
 
 #include <freerdp/types.h>
 #include <freerdp/channels/log.h>
 
 #include "rdpsnd_main.h"
+
+#define SEM_COUNT_MAX 4
 
 typedef struct rdpsnd_winmm_plugin rdpsndWinmmPlugin;
 
@@ -49,7 +56,9 @@ struct rdpsnd_winmm_plugin
 	HWAVEOUT hWaveOut;
 	WAVEFORMATEX format;
 	UINT32 volume;
-	HANDLE next;
+	wLog* log;
+	UINT32 latency;
+	HANDLE semaphore;
 };
 
 static BOOL rdpsnd_winmm_convert_format(const AUDIO_FORMAT* in, WAVEFORMATEX* out)
@@ -80,38 +89,32 @@ static BOOL rdpsnd_winmm_convert_format(const AUDIO_FORMAT* in, WAVEFORMATEX* ou
 static BOOL rdpsnd_winmm_set_format(rdpsndDevicePlugin* device, const AUDIO_FORMAT* format,
                                     UINT32 latency)
 {
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)device;
 
+	winmm->latency = latency;
 	if (!rdpsnd_winmm_convert_format(format, &winmm->format))
 		return FALSE;
 
 	return TRUE;
 }
 
-static void CALLBACK rdpsnd_winmm_callback_function(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance,
-        DWORD_PTR dwParam1, DWORD_PTR dwParam2)
+static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1,
+                                 DWORD_PTR dwParam2)
 {
-	LPWAVEHDR lpWaveHdr;
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) dwInstance;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)dwInstance;
+	LPWAVEHDR lpWaveHdr = (LPWAVEHDR)dwParam1;
 
 	switch (uMsg)
 	{
-		case MM_WOM_OPEN:
-			WLog_DBG(TAG,  "MM_WOM_OPEN");
+		case WOM_OPEN:
+		case WOM_CLOSE:
 			break;
-
-		case MM_WOM_CLOSE:
-			WLog_DBG(TAG,  "MM_WOM_CLOSE");
-			break;
-
-		case MM_WOM_DONE:
-			WLog_DBG(TAG, "MM_WOM_DONE");
-			lpWaveHdr = (LPWAVEHDR) dwParam1;
+		case WOM_DONE:
+			waveOutUnprepareHeader(hwo, lpWaveHdr, sizeof(WAVEHDR));
 			free(lpWaveHdr);
+			ReleaseSemaphore(winmm->semaphore, 1, NULL);
 			break;
-
 		default:
-			WLog_DBG(TAG, "UNKNOWN [0x%08"PRIx32"]", uMsg);
 			break;
 	}
 }
@@ -120,7 +123,7 @@ static BOOL rdpsnd_winmm_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* fo
                               UINT32 latency)
 {
 	MMRESULT mmResult;
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)device;
 
 	if (winmm->hWaveOut)
 		return TRUE;
@@ -135,20 +138,22 @@ static BOOL rdpsnd_winmm_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* fo
 
 	#pragma endregion
 
-	mmResult = waveOutOpen(&winmm->hWaveOut, WAVE_MAPPER, &winmm->format,
-	                       (DWORD_PTR) rdpsnd_winmm_callback_function, (DWORD_PTR) winmm, CALLBACK_FUNCTION);
+	mmResult = waveOutOpen(&winmm->hWaveOut, WAVE_MAPPER, &winmm->format, (DWORD_PTR)waveOutProc,
+	                       (DWORD_PTR)winmm, CALLBACK_FUNCTION);
 
 	if (mmResult != MMSYSERR_NOERROR)
 	{
-		WLog_ERR(TAG, "waveOutOpen failed: %"PRIu32"", mmResult);
+		WLog_Print(winmm->log, WLOG_ERROR, "waveOutOpen failed: %" PRIu32 "", mmResult);
 		return FALSE;
 	}
+
+	ReleaseSemaphore(winmm->semaphore, SEM_COUNT_MAX, NULL);
 
 	mmResult = waveOutSetVolume(winmm->hWaveOut, winmm->volume);
 
 	if (mmResult != MMSYSERR_NOERROR)
 	{
-		WLog_ERR(TAG, "waveOutSetVolume failed: %"PRIu32"", mmResult);
+		WLog_Print(winmm->log, WLOG_ERROR, "waveOutSetVolume failed: %" PRIu32 "", mmResult);
 		return FALSE;
 	}
 
@@ -157,18 +162,17 @@ static BOOL rdpsnd_winmm_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* fo
 
 static void rdpsnd_winmm_close(rdpsndDevicePlugin* device)
 {
+	size_t x;
 	MMRESULT mmResult;
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)device;
 
 	if (winmm->hWaveOut)
 	{
-		mmResult = waveOutReset(winmm->hWaveOut);
+		for (x = 0; x < SEM_COUNT_MAX; x++)
+			WaitForSingleObject(winmm->semaphore, INFINITE);
 		mmResult = waveOutClose(winmm->hWaveOut);
-
 		if (mmResult != MMSYSERR_NOERROR)
-		{
-			WLog_ERR(TAG,  "waveOutClose failure: %"PRIu32"", mmResult);
-		}
+			WLog_Print(winmm->log, WLOG_ERROR, "waveOutClose failure: %" PRIu32 "", mmResult);
 
 		winmm->hWaveOut = NULL;
 	}
@@ -176,11 +180,12 @@ static void rdpsnd_winmm_close(rdpsndDevicePlugin* device)
 
 static void rdpsnd_winmm_free(rdpsndDevicePlugin* device)
 {
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)device;
 
 	if (winmm)
 	{
 		rdpsnd_winmm_close(device);
+		CloseHandle(winmm->semaphore);
 		free(winmm);
 	}
 }
@@ -190,6 +195,7 @@ static BOOL rdpsnd_winmm_format_supported(rdpsndDevicePlugin* device, const AUDI
 	MMRESULT result;
 	WAVEFORMATEX out;
 
+	WINPR_UNUSED(device);
 	if (rdpsnd_winmm_convert_format(format, &out))
 	{
 		#pragma region Myrtille
@@ -210,42 +216,51 @@ static BOOL rdpsnd_winmm_format_supported(rdpsndDevicePlugin* device, const AUDI
 
 static UINT32 rdpsnd_winmm_get_volume(rdpsndDevicePlugin* device)
 {
-	DWORD dwVolume;
-	UINT16 dwVolumeLeft;
-	UINT16 dwVolumeRight;
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
-	dwVolumeLeft = ((50 * 0xFFFF) / 100); /* 50% */
-	dwVolumeRight = ((50 * 0xFFFF) / 100); /* 50% */
-	dwVolume = (dwVolumeLeft << 16) | dwVolumeRight;
+	MMRESULT mmResult;
+	DWORD dwVolume = UINT32_MAX;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)device;
 
 	if (!winmm->hWaveOut)
 		return dwVolume;
 
-	waveOutGetVolume(winmm->hWaveOut, &dwVolume);
+	mmResult = waveOutGetVolume(winmm->hWaveOut, &dwVolume);
+	if (mmResult != MMSYSERR_NOERROR)
+	{
+		WLog_Print(winmm->log, WLOG_ERROR, "waveOutGetVolume failure: %" PRIu32 "", mmResult);
+		dwVolume = UINT32_MAX;
+	}
 	return dwVolume;
 }
 
 static BOOL rdpsnd_winmm_set_volume(rdpsndDevicePlugin* device, UINT32 value)
 {
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	MMRESULT mmResult;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)device;
 	winmm->volume = value;
 
 	if (!winmm->hWaveOut)
 		return TRUE;
 
-	return (waveOutSetVolume(winmm->hWaveOut, value) == MMSYSERR_NOERROR);
+	mmResult = waveOutSetVolume(winmm->hWaveOut, value);
+	if (mmResult != MMSYSERR_NOERROR)
+	{
+		WLog_Print(winmm->log, WLOG_ERROR, "waveOutGetVolume failure: %" PRIu32 "", mmResult);
+		return FALSE;
+	}
+	return TRUE;
 }
 
 static void rdpsnd_winmm_start(rdpsndDevicePlugin* device)
 {
-	//rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	// rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	WINPR_UNUSED(device);
 }
 
 static UINT rdpsnd_winmm_play(rdpsndDevicePlugin* device, const BYTE* data, size_t size)
 {
 	MMRESULT mmResult;
 	LPWAVEHDR lpWaveHdr;
-	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*) device;
+	rdpsndWinmmPlugin* winmm = (rdpsndWinmmPlugin*)device;
 
 	#pragma region Myrtille
 
@@ -257,31 +272,33 @@ static UINT rdpsnd_winmm_play(rdpsndDevicePlugin* device, const BYTE* data, size
 	if (!winmm->hWaveOut)
 		return 0;
 
-	lpWaveHdr = (LPWAVEHDR) malloc(sizeof(WAVEHDR));
+	if (size > UINT32_MAX)
+		return 0;
 
+	lpWaveHdr = malloc(sizeof(WAVEHDR));
 	if (!lpWaveHdr)
 		return 0;
 
-	ZeroMemory(lpWaveHdr, sizeof(WAVEHDR));
 	lpWaveHdr->dwFlags = 0;
 	lpWaveHdr->dwLoops = 0;
-	lpWaveHdr->lpData = (LPSTR) data;
-	lpWaveHdr->dwBufferLength = size;
-	lpWaveHdr->dwUser = NULL;
-	lpWaveHdr->lpNext = NULL;
+	lpWaveHdr->lpData = (LPSTR)data;
+	lpWaveHdr->dwBufferLength = (DWORD)size;
+
 	mmResult = waveOutPrepareHeader(winmm->hWaveOut, lpWaveHdr, sizeof(WAVEHDR));
 
 	if (mmResult != MMSYSERR_NOERROR)
 	{
-		WLog_ERR(TAG,  "waveOutPrepareHeader failure: %"PRIu32"", mmResult);
+		WLog_Print(winmm->log, WLOG_ERROR, "waveOutPrepareHeader failure: %" PRIu32 "", mmResult);
+		free(lpWaveHdr);
 		return 0;
 	}
 
+	WaitForSingleObject(winmm->semaphore, INFINITE);
 	mmResult = waveOutWrite(winmm->hWaveOut, lpWaveHdr, sizeof(WAVEHDR));
 
 	if (mmResult != MMSYSERR_NOERROR)
 	{
-		WLog_ERR(TAG,  "waveOutWrite failure: %"PRIu32"", mmResult);
+		WLog_Print(winmm->log, WLOG_ERROR, "waveOutWrite failure: %" PRIu32 "", mmResult);
 		waveOutUnprepareHeader(winmm->hWaveOut, lpWaveHdr, sizeof(WAVEHDR));
 		free(lpWaveHdr);
 		return 0;
@@ -298,17 +315,19 @@ static UINT rdpsnd_winmm_play(rdpsndDevicePlugin* device, const BYTE* data, size
 
 	#pragma endregion
 
-	return 10; /* TODO: Get real latencry in [ms] */
+	return winmm->latency;
 }
 
 static void rdpsnd_winmm_parse_addin_args(rdpsndDevicePlugin* device, ADDIN_ARGV* args)
 {
+	WINPR_UNUSED(device);
+	WINPR_UNUSED(args);
 }
 
 #ifdef BUILTIN_CHANNELS
-#define freerdp_rdpsnd_client_subsystem_entry	winmm_freerdp_rdpsnd_client_subsystem_entry
+#define freerdp_rdpsnd_client_subsystem_entry winmm_freerdp_rdpsnd_client_subsystem_entry
 #else
-#define freerdp_rdpsnd_client_subsystem_entry	FREERDP_API freerdp_rdpsnd_client_subsystem_entry
+#define freerdp_rdpsnd_client_subsystem_entry FREERDP_API freerdp_rdpsnd_client_subsystem_entry
 #endif
 
 /**
@@ -320,10 +339,13 @@ UINT freerdp_rdpsnd_client_subsystem_entry(PFREERDP_RDPSND_DEVICE_ENTRY_POINTS p
 {
 	ADDIN_ARGV* args;
 	rdpsndWinmmPlugin* winmm;
-	winmm = (rdpsndWinmmPlugin*) calloc(1, sizeof(rdpsndWinmmPlugin));
+	winmm = (rdpsndWinmmPlugin*)calloc(1, sizeof(rdpsndWinmmPlugin));
 
 	if (!winmm)
 		return CHANNEL_RC_NO_MEMORY;
+
+	if (waveOutGetNumDevs() == 0)
+		return ERROR_DEVICE_NOT_AVAILABLE;
 
 	winmm->device.Open = rdpsnd_winmm_open;
 	winmm->device.FormatSupported = rdpsnd_winmm_format_supported;
@@ -333,7 +355,11 @@ UINT freerdp_rdpsnd_client_subsystem_entry(PFREERDP_RDPSND_DEVICE_ENTRY_POINTS p
 	winmm->device.Play = rdpsnd_winmm_play;
 	winmm->device.Close = rdpsnd_winmm_close;
 	winmm->device.Free = rdpsnd_winmm_free;
-
+	winmm->log = WLog_Get(TAG);
+	winmm->semaphore = CreateSemaphore(NULL, 0, SEM_COUNT_MAX, NULL);
+	if (!winmm->semaphore)
+		goto fail;
+	
 	#pragma region Myrtille
 
 	winmm->device.rdpcontext = pEntryPoints->rdpcontext;
@@ -341,8 +367,12 @@ UINT freerdp_rdpsnd_client_subsystem_entry(PFREERDP_RDPSND_DEVICE_ENTRY_POINTS p
 	#pragma endregion
 
 	args = pEntryPoints->args;
-	rdpsnd_winmm_parse_addin_args((rdpsndDevicePlugin*) winmm, args);
+	rdpsnd_winmm_parse_addin_args((rdpsndDevicePlugin*)winmm, args);
 	winmm->volume = 0xFFFFFFFF;
-	pEntryPoints->pRegisterRdpsndDevice(pEntryPoints->rdpsnd, (rdpsndDevicePlugin*) winmm);
+	pEntryPoints->pRegisterRdpsndDevice(pEntryPoints->rdpsnd, (rdpsndDevicePlugin*)winmm);
 	return CHANNEL_RC_OK;
+
+fail:
+	rdpsnd_winmm_free((rdpsndDevicePlugin*)winmm);
+	return ERROR_INTERNAL_ERROR;
 }

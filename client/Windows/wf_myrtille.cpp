@@ -51,7 +51,7 @@ std::wstring s2ws(const std::string& s);
 DWORD connectRemoteSessionPipes(wfContext* wfc);
 HANDLE connectRemoteSessionPipe(wfContext* wfc, std::string pipeName, DWORD accessMode, DWORD shareMode, DWORD flags);
 std::string createRemoteSessionDirectory(wfContext* wfc);
-void processResizeDisplay(wfContext* wfc, std::string args);
+void processResizeDisplay(wfContext* wfc, bool keepAspectRatio, std::string resolution);
 void processMouseInput(wfContext* wfc, std::string input, UINT16 flags);
 void sendMessage(wfContext* wfc, std::wstring msg);
 void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int right, int bottom, bool fullscreen);
@@ -194,7 +194,7 @@ struct wf_myrtille
 	bool screenshotEnabled;					// take screenshot on the next fullscreen update
 
 	// clipboard
-	//std::wstring clipboardText;			// unicode
+	std::wstring clipboardText;				// unicode text
 
 	// GDI+
 	ULONG_PTR gdiplusToken;
@@ -301,32 +301,32 @@ void wf_myrtille_start(wfContext* wfc)
 	myrtille->screenshotEnabled = false;
 
 	// clipboard
-	//myrtille->clipboardText = L"";
+	myrtille->clipboardText = L"";
 
-	// if the local (gateway) clipboard is empty, the rdp server won't enable the paste action
+	// if the local (gateway) clipboard is not set, the rdp server won't enable the paste action
 	// this is a problem because, even if the client (browser) clipboard is received and its value stored,
 	// it won't be possible to paste it, thus retrieve it and render it! :/
 	
-	// a workaround is to add an empty value into the clipboard in order to enable the paste action
+	// a workaround is to set an empty value into the clipboard in order to enable the paste action
 	// pasting an empty value just does nothing and it's quite reasonable to have the paste action enabled for clipboard synchronization
 	// once the client clipboard is received, the paste action will trigger its retrieval and rendering!
 
 	// TODO: find a better way to handle that...
 
-	//if (OpenClipboard(0))
-	//{
-	//	HANDLE hData = GetClipboardData(CF_UNICODETEXT);
-	//	if (!hData)
-	//	{
-	//		size_t bytesPerChar = sizeof(wchar_t);
-	//		size_t size = (wcslen(myrtille->clipboardText.c_str()) + 1) * bytesPerChar;
-	//		HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
-	//		memcpy(GlobalLock(hMem), myrtille->clipboardText.c_str(), size);
-	//		GlobalUnlock(hMem);
-	//		SetClipboardData(CF_UNICODETEXT, hMem);
-	//	}
-	//	CloseClipboard();
-	//}
+	if (OpenClipboard(0))
+	{
+		HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+		if (!hData)
+		{
+			size_t bytesPerChar = sizeof(wchar_t);
+			size_t size = (wcslen(myrtille->clipboardText.c_str()) + 1) * bytesPerChar;
+			HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
+			memcpy(GlobalLock(hMem), myrtille->clipboardText.c_str(), size);
+			GlobalUnlock(hMem);
+			SetClipboardData(CF_UNICODETEXT, hMem);
+		}
+		CloseClipboard();
+	}
 
 	// GDI+
 	GdiplusStartupInput gdiplusStartupInput;
@@ -756,24 +756,21 @@ void wf_myrtille_send_cursor(wfContext* wfc)
 	hdc = NULL;
 }
 
-//void wf_myrtille_read_client_clipboard(wfContext* wfc, const wchar_t** text, size_t* size)
-//{
-//	if (wfc->context.settings->MyrtilleSessionId == NULL)
-//		return;
-//
-//	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
-//
-//	if (myrtille->clipboardText.length() > 0)
-//	{
-//		*text = myrtille->clipboardText.c_str();
-//
-//		// unicode is 2 bytes (16 bits) per character (UTF-16LE)
-//		size_t bytesPerChar = sizeof(wchar_t);
-//
-//		// clipboard length + null terminator size in bytes
-//		*size = (myrtille->clipboardText.length() + 1) * bytesPerChar;
-//	}
-//}
+void wf_myrtille_read_client_clipboard(wfContext* wfc, const wchar_t** text, size_t* size)
+{
+	if (wfc->context.settings->MyrtilleSessionId == NULL)
+		return;
+
+	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
+
+	*text = myrtille->clipboardText.c_str();
+
+	// unicode is 2 bytes (16 bits) per character (UTF-16LE)
+	size_t bytesPerChar = sizeof(wchar_t);
+
+	// clipboard length + null terminator size in bytes
+	*size = (myrtille->clipboardText.length() + 1) * bytesPerChar;
+}
 
 void wf_myrtille_read_server_clipboard(wfContext* wfc)
 {
@@ -1111,6 +1108,7 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 				}
 
 				std::vector<std::string> args;
+				WCHAR* clipboardText = NULL;
 
 				switch (command)
 				{
@@ -1225,8 +1223,15 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 
 					// browser resize
 					case COMMAND::SEND_BROWSER_RESIZE:
-					    processResizeDisplay(wfc, commandArgs);
-					    sendMessage(wfc, L"reload");
+						if (myrtille->scaleDisplay)
+						{
+							args = split(commandArgs, '|');
+							if (args.size() == 2)
+							{
+								processResizeDisplay(wfc, args[0] == "1", args[1]);
+							}
+							sendMessage(wfc, L"reload");
+						}
 						break;
 
 					// browser pulse
@@ -1293,7 +1298,14 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 					// scale display
 					case COMMAND::SET_SCALE_DISPLAY:
 						myrtille->scaleDisplay = commandArgs != "0";
-					    processResizeDisplay(wfc, commandArgs);
+						if (myrtille->scaleDisplay)
+						{
+							args = split(commandArgs, '|');
+							if (args.size() == 2)
+							{
+								processResizeDisplay(wfc, args[0] == "1", args[1]);
+							}
+						}
 						sendMessage(wfc, L"reload");
 						break;
 
@@ -1301,7 +1313,15 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 					case COMMAND::SET_RECONNECT_SESSION:
 						// there are methods into freerdp to handle session reconnection but there are some issues with them
 						// reconnection is delegated to the gateway
-						sendMessage(wfc, L"reload");
+						args = split(commandArgs, '|');
+						if (args.size() == 2)
+						{
+							// reloading the page is optional
+							if (args[1] == "1")
+							{
+								sendMessage(wfc, L"reload");
+							}
+						}
 						break;
 
 					// image encoding
@@ -1366,20 +1386,8 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 					// client clipboard
 					case COMMAND::SEND_LOCAL_CLIPBOARD:
 						// convert to unicode and store the value
-						//myrtille->clipboardText = s2ws(commandArgs);
-
-						if (OpenClipboard(0))
-						{
-							WCHAR* clipboardText = NULL;
-							ConvertToUnicode(CP_UTF8, 0, commandArgs.c_str(), -1, &clipboardText, 0);
-							size_t bytesPerChar = sizeof(wchar_t);
-							size_t size = (wcslen(clipboardText) + 1) * bytesPerChar;
-							HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
-							memcpy(GlobalLock(hMem), clipboardText, size);
-							GlobalUnlock(hMem);
-							SetClipboardData(CF_UNICODETEXT, hMem);
-							CloseClipboard();
-						}
+						ConvertToUnicode(CP_UTF8, 0, commandArgs.c_str(), -1, &clipboardText, 0);
+						myrtille->clipboardText = std::wstring(clipboardText);
 
 						// the clipboard virtual channel is sometimes bugged (wfc->cliprdr is null; wfreerdp or rdp server issue?)
 						// I wasn't able to replicate the issue (had it once whith wfreerdp running under an account which is not member of the target domain, but then stopped to have it)
@@ -1427,30 +1435,38 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 	return 0;
 }
 
-void processResizeDisplay(wfContext* wfc, std::string args)
+void processResizeDisplay(wfContext* wfc, bool keepAspectRatio, std::string resolution)
 {
 	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
 
-	int separatorIdx = args.find("x");
+	int separatorIdx = resolution.find("x");
 	if (separatorIdx != std::string::npos)
 	{
-		int clientWidth = stoi(args.substr(0, separatorIdx));
-		int clientHeight = stoi(args.substr(separatorIdx + 1, args.length() - separatorIdx - 1));
-		float aspectRatio = (float)clientWidth / (float)clientHeight;
-		if (myrtille->aspectRatio == aspectRatio)
+		int clientWidth = stoi(resolution.substr(0, separatorIdx));
+		int clientHeight = stoi(resolution.substr(separatorIdx + 1, resolution.length() - separatorIdx - 1));
+		if (keepAspectRatio)
 		{
-			myrtille->clientWidth = clientWidth;
-			myrtille->clientHeight = clientHeight;
-		}
-		else if (myrtille->aspectRatio < aspectRatio)
-		{
-			myrtille->clientWidth = clientHeight * myrtille->aspectRatio;
-			myrtille->clientHeight = clientHeight;
+			float aspectRatio = (float)clientWidth / (float)clientHeight;
+			if (myrtille->aspectRatio == aspectRatio)
+			{
+				myrtille->clientWidth = clientWidth;
+				myrtille->clientHeight = clientHeight;
+			}
+			else if (myrtille->aspectRatio < aspectRatio)
+			{
+				myrtille->clientWidth = clientHeight * myrtille->aspectRatio;
+				myrtille->clientHeight = clientHeight;
+			}
+			else
+			{
+				myrtille->clientWidth = clientWidth;
+				myrtille->clientHeight = clientWidth / myrtille->aspectRatio;
+			}
 		}
 		else
 		{
 			myrtille->clientWidth = clientWidth;
-			myrtille->clientHeight = clientWidth / myrtille->aspectRatio;
+			myrtille->clientHeight = clientHeight;
 		}
 	}
 }

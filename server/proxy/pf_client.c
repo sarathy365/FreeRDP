@@ -45,41 +45,70 @@
 #include "pf_channels.h"
 #include "pf_gdi.h"
 #include "pf_graphics.h"
-#include "pf_common.h"
 #include "pf_client.h"
 #include "pf_context.h"
 #include "pf_update.h"
 #include "pf_log.h"
+#include "pf_modules.h"
+#include "pf_capture.h"
 
 #define TAG PROXY_TAG("client")
 
-/**
- * Re-negotiate with original client after negotiation between the proxy
- * and the target has finished.
- */
-static void proxy_server_reactivate(rdpContext* client, rdpContext* target)
+static BOOL proxy_server_reactivate(rdpContext* ps, const rdpContext* pc)
 {
-	pf_common_copy_settings(client->settings, target->settings);
-	/* DesktopResize causes internal function rdp_server_reactivate to be called,
+	if (!pf_context_copy_settings(ps->settings, pc->settings))
+		return FALSE;
+
+	/*
+	 * DesktopResize causes internal function rdp_server_reactivate to be called,
 	 * which causes the reactivation.
 	 */
-	client->update->DesktopResize(client);
+	if (!ps->update->DesktopResize(ps))
+		return FALSE;
+
+	return TRUE;
 }
 
 static void pf_OnErrorInfo(void* ctx, ErrorInfoEventArgs* e)
 {
-	pClientContext* pc = (pClientContext*) ctx;
-	proxyData* pdata = pc->pdata;
-	rdpContext* ps = (rdpContext*)pdata->ps;
+	pClientContext* pc = (pClientContext*)ctx;
+	pServerContext* ps = pc->pdata->ps;
 
-	if (e->code != ERRINFO_NONE)
+	if (e->code == ERRINFO_NONE)
+		return;
+
+	WLog_WARN(TAG, "received error info code: 0x%08" PRIu32 ", msg: %s", e->code,
+	          freerdp_get_error_info_string(e->code));
+
+	/* forward error back to client */
+	freerdp_set_error_info(ps->context.rdp, e->code);
+	freerdp_send_error_info(ps->context.rdp);
+}
+
+static BOOL pf_client_load_rdpsnd(pClientContext* pc, proxyConfig* config)
+{
+	rdpContext* context = (rdpContext*)pc;
+	pServerContext* ps = pc->pdata->ps;
+
+	/*
+	 * if AudioOutput is enabled in proxy and client connected with rdpsnd, use proxy as rdpsnd
+	 * backend. Otherwise, use sys:fake.
+	 */
+	if (!freerdp_static_channel_collection_find(context->settings, "rdpsnd"))
 	{
-		const char* errorMessage = freerdp_get_error_info_string(e->code);
-		WLog_WARN(TAG, "Proxy's client received error info pdu from server: (0x%08"PRIu32"): %s", e->code, errorMessage);
-		/* forward error back to client */
-		freerdp_set_error_info(ps->rdp, e->code);
-		freerdp_send_error_info(ps->rdp);
+		char* params[2];
+		params[0] = "rdpsnd";
+
+		if (config->AudioOutput && WTSVirtualChannelManagerIsChannelJoined(ps->vcm, "rdpsnd"))
+			params[1] = "sys:proxy";
+		else
+			params[1] = "sys:fake";
+
+		if (!freerdp_client_add_static_channel(context->settings, 2, (char**)params))
+			return FALSE;
 	}
+
+	return TRUE;
 }
 
 /**
@@ -90,35 +119,60 @@ static void pf_OnErrorInfo(void* ctx, ErrorInfoEventArgs* e)
  */
 static BOOL pf_client_pre_connect(freerdp* instance)
 {
+	pClientContext* pc = (pClientContext*)instance->context;
+	pServerContext* ps = pc->pdata->ps;
+	proxyConfig* config = ps->pdata->config;
 	rdpSettings* settings = instance->settings;
-	settings->OsMajorType = OSMAJORTYPE_UNIX;
-	settings->OsMinorType = OSMINORTYPE_NATIVE_XSERVER;
-	/**
-	 * settings->OrderSupport is initialized at this point.
-	 * Only override it if you plan to implement custom order
-	 * callbacks or deactiveate certain features.
-	 */
 
-	/* currently not supporting GDI orders */
+	/*
+	 * as the client's settings are copied from the server's, GlyphSupportLevel might not be
+	 * GLYPH_SUPPORT_NONE. the proxy currently do not support GDI & GLYPH_SUPPORT_CACHE, so
+	 * GlyphCacheSupport must be explicitly set to GLYPH_SUPPORT_NONE.
+	 *
+	 * Also, OrderSupport need to be zeroed, because it is currently not supported.
+	 */
+	settings->GlyphSupportLevel = GLYPH_SUPPORT_NONE;
 	ZeroMemory(instance->settings->OrderSupport, 32);
 
+	settings->OsMajorType = OSMAJORTYPE_UNIX;
+	settings->OsMinorType = OSMINORTYPE_NATIVE_XSERVER;
+
+	settings->SupportDynamicChannels = TRUE;
+
+	/* Multimon */
+	settings->UseMultimon = TRUE;
+
+	/* Sound */
+	settings->AudioPlayback = FALSE;
+	settings->DeviceRedirection = TRUE;
+
+	/* Display control */
+	settings->SupportDisplayControl = config->DisplayControl;
+	settings->DynamicResolutionUpdate = config->DisplayControl;
+
+	settings->AutoReconnectionEnabled = TRUE;
 	/**
 	 * Register the channel listeners.
 	 * They are required to set up / tear down channels if they are loaded.
 	 */
-	PubSub_SubscribeChannelConnected(instance->context->pubSub,
-	                                 pf_OnChannelConnectedEventHandler);
+	PubSub_SubscribeChannelConnected(instance->context->pubSub, pf_OnChannelConnectedEventHandler);
 	PubSub_SubscribeChannelDisconnected(instance->context->pubSub,
 	                                    pf_OnChannelDisconnectedEventHandler);
 	PubSub_SubscribeErrorInfo(instance->context->pubSub, pf_OnErrorInfo);
+
 	/**
 	 * Load all required plugins / channels / libraries specified by current
 	 * settings.
 	 */
 	WLog_INFO(TAG, "Loading addins");
 
-	if (!freerdp_client_load_addins(instance->context->channels,
-	                                instance->settings))
+	if (!pf_client_load_rdpsnd(pc, config))
+	{
+		WLog_ERR(TAG, "Failed to load rdpsnd client!");
+		return FALSE;
+	}
+
+	if (!freerdp_client_load_addins(instance->context->channels, instance->settings))
 	{
 		WLog_ERR(TAG, "Failed to load addins");
 		return FALSE;
@@ -141,22 +195,29 @@ static BOOL pf_client_post_connect(freerdp* instance)
 	rdpContext* context;
 	rdpSettings* settings;
 	rdpUpdate* update;
-	pClientContext* pc;
 	rdpContext* ps;
+	pClientContext* pc;
+	proxyConfig* config;
 
 	context = instance->context;
 	settings = instance->settings;
 	update = instance->update;
-	pc = (pClientContext*) context;
-	ps = (rdpContext*) pc->pdata->ps;
+	pc = (pClientContext*)context;
+	ps = (rdpContext*)pc->pdata->ps;
+	config = pc->pdata->config;
 
-	if (!proxy_data_set_connection_info(pc->pdata, ps->settings, settings))
+	if (config->SessionCapture)
 	{
-		WLog_ERR(TAG, "proxy_data_set_connection_info failed!");
-		return FALSE;
+		if (!pf_capture_create_session_directory(pc))
+		{
+			WLog_ERR(TAG, "pf_capture_create_session_directory failed!");
+			return FALSE;
+		}
+
+		WLog_INFO(TAG, "frames dir created: %s", pc->frames_dir);
 	}
 
-	if (!gdi_init(instance, PIXEL_FORMAT_XRGB32))
+	if (!gdi_init(instance, PIXEL_FORMAT_BGRA32))
 		return FALSE;
 
 	if (!pf_register_pointer(context->graphics))
@@ -177,12 +238,16 @@ static BOOL pf_client_post_connect(freerdp* instance)
 		offscreen_cache_register_callbacks(update);
 		palette_cache_register_callbacks(update);
 	}
-	
-	pf_client_register_update_callbacks(update);
-	proxy_server_reactivate(ps, context);
-	return TRUE;
-}
 
+	pf_client_register_update_callbacks(update);
+
+	/*
+	 * after the connection fully established and settings were negotiated with target server, send
+	 * a reactivation sequence to the client with the negotiated settings. This way, settings are
+	 * synchorinized between proxy's peer and and remote target.
+	 */
+	return proxy_server_reactivate(ps, context);
+}
 
 /* This function is called whether a session ends by failure or success.
  * Clean up everything allocated by pre_connect and post_connect.
@@ -198,7 +263,7 @@ static void pf_client_post_disconnect(freerdp* instance)
 	if (!instance->context)
 		return;
 
-	context = (pClientContext*) instance->context;
+	context = (pClientContext*)instance->context;
 	pdata = context->pdata;
 
 	PubSub_UnsubscribeChannelConnected(instance->context->pubSub,
@@ -208,10 +273,83 @@ static void pf_client_post_disconnect(freerdp* instance)
 	PubSub_UnsubscribeErrorInfo(instance->context->pubSub, pf_OnErrorInfo);
 	gdi_free(instance);
 
-	SetEvent(pdata->connectionClosed);
-	/* It's important to avoid calling `freerdp_peer_context_free` and `freerdp_peer_free` here,
-	 * in order to avoid double-free. Those objects will be freed by the server when needed.
-	 */
+	/* Only close the connection if NLA fallback process is done */
+	if (!context->allow_next_conn_failure)
+		proxy_data_abort_connect(pdata);
+}
+
+/*
+ * pf_client_should_retry_without_nla:
+ *
+ * returns TRUE if in case of connection failure, the client should try again without NLA.
+ * Otherwise, returns FALSE.
+ */
+static BOOL pf_client_should_retry_without_nla(pClientContext* pc)
+{
+	rdpSettings* settings = pc->context.settings;
+	proxyConfig* config = pc->pdata->config;
+
+	if (!settings->NlaSecurity)
+		return FALSE;
+
+	return config->ClientTlsSecurity || config->ClientRdpSecurity;
+}
+
+static void pf_client_set_security_settings(pClientContext* pc)
+{
+	rdpSettings* settings = pc->context.settings;
+	proxyConfig* config = pc->pdata->config;
+
+	settings->RdpSecurity = config->ClientRdpSecurity;
+	settings->TlsSecurity = config->ClientTlsSecurity;
+	settings->NlaSecurity = FALSE;
+
+	if (!config->ClientNlaSecurity)
+		return;
+
+	if (!settings->Username || !settings->Password)
+		return;
+
+	settings->NlaSecurity = TRUE;
+}
+
+static BOOL pf_client_connect_without_nla(pClientContext* pc)
+{
+	freerdp* instance = pc->context.instance;
+	rdpSettings* settings = pc->context.settings;
+
+	/* disable NLA */
+	settings->NlaSecurity = FALSE;
+
+	/* do not allow next connection failure */
+	pc->allow_next_conn_failure = FALSE;
+	return freerdp_connect(instance);
+}
+
+static BOOL pf_client_connect(freerdp* instance)
+{
+	pClientContext* pc = (pClientContext*)instance->context;
+	BOOL rc = FALSE;
+
+	pf_client_set_security_settings(pc);
+	if (pf_client_should_retry_without_nla(pc))
+		pc->allow_next_conn_failure = TRUE;
+
+	if (!freerdp_connect(instance))
+	{
+		WLog_ERR(TAG, "failed to connect with NLA. disabling NLA and retyring...");
+
+		if (!pf_client_connect_without_nla(pc))
+		{
+			WLog_ERR(TAG, "pf_client_connect_without_nla failed!");
+			goto out;
+		}
+	}
+
+	rc = TRUE;
+out:
+	pc->allow_next_conn_failure = FALSE;
+	return rc;
 }
 
 /**
@@ -222,14 +360,32 @@ static void pf_client_post_disconnect(freerdp* instance)
 static DWORD WINAPI pf_client_thread_proc(LPVOID arg)
 {
 	freerdp* instance = (freerdp*)arg;
+	pClientContext* pc = (pClientContext*)instance->context;
+	pServerContext* ps = pc->pdata->ps;
+	proxyData* pdata = pc->pdata;
 	DWORD nCount;
 	DWORD status;
-	HANDLE handles[64];
+	HANDLE handles[65];
 
-	if (!freerdp_connect(instance))
+	/*
+	 * during redirection, freerdp's abort event might be overriden (reset) by the library, after
+	 * the server set it in order to shutdown the connection. it means that the server might signal
+	 * the client to abort, but the library code will override the signal and the client will
+	 * continue its work instead of exiting. That's why the client must wait on `pdata->abort_event`
+	 * too, which will never be modified by the library.
+	 */
+	handles[64] = pdata->abort_event;
+
+	if (!pf_modules_run_hook(HOOK_TYPE_CLIENT_PRE_CONNECT, (rdpContext*)ps))
 	{
-		WLog_ERR(TAG, "connection failure");
-		return 0;
+		proxy_data_abort_connect(pdata);
+		return FALSE;
+	}
+
+	if (!pf_client_connect(instance))
+	{
+		proxy_data_abort_connect(pdata);
+		return FALSE;
 	}
 
 	while (!freerdp_shall_disconnect(instance))
@@ -242,16 +398,19 @@ static DWORD WINAPI pf_client_thread_proc(LPVOID arg)
 			break;
 		}
 
-		status = WaitForMultipleObjects(nCount, handles, FALSE, 100);
+		status = WaitForMultipleObjects(nCount, handles, FALSE, INFINITE);
 
 		if (status == WAIT_FAILED)
 		{
-			WLog_ERR(TAG, "%s: WaitForMultipleObjects failed with %"PRIu32"", __FUNCTION__,
+			WLog_ERR(TAG, "%s: WaitForMultipleObjects failed with %" PRIu32 "", __FUNCTION__,
 			         status);
 			break;
 		}
 
 		if (freerdp_shall_disconnect(instance))
+			break;
+
+		if (proxy_data_shall_disconnect(pdata))
 			break;
 
 		if (!freerdp_check_event_handles(instance->context))
@@ -282,14 +441,12 @@ static BOOL pf_client_global_init(void)
 
 static int pf_logon_error_info(freerdp* instance, UINT32 data, UINT32 type)
 {
-	pClientContext* pc;
 	const char* str_data = freerdp_get_logon_error_info_data(data);
 	const char* str_type = freerdp_get_logon_error_info_type(type);
 
 	if (!instance || !instance->context)
 		return -1;
 
-	pc = (pClientContext*) instance->context;
 	WLog_INFO(TAG, "Logon Error Info %s [%s]", str_data, str_type);
 	return 1;
 }
@@ -311,9 +468,9 @@ static int pf_logon_error_info(freerdp* instance, UINT32 data, UINT32 type)
  * @return 1 if the certificate is trusted, 2 if temporary trusted, 0 otherwise.
  */
 static DWORD pf_client_verify_certificate_ex(freerdp* instance, const char* host, UINT16 port,
-        const char* common_name,
-        const char* subject, const char* issuer,
-        const char* fingerprint, DWORD flags)
+                                             const char* common_name, const char* subject,
+                                             const char* issuer, const char* fingerprint,
+                                             DWORD flags)
 {
 	/* TODO: Add trust level to proxy configurable settings */
 	return 1;
@@ -338,13 +495,10 @@ static DWORD pf_client_verify_certificate_ex(freerdp* instance, const char* host
  *
  * @return 1 if the certificate is trusted, 2 if temporary trusted, 0 otherwise.
  */
-static DWORD pf_client_verify_changed_certificate_ex(freerdp* instance,
-        const char* host, UINT16 port,
-        const char* common_name,
-        const char* subject, const char* issuer,
-        const char* fingerprint,
-        const char* old_subject, const char* old_issuer,
-        const char* old_fingerprint, DWORD flags)
+static DWORD pf_client_verify_changed_certificate_ex(
+    freerdp* instance, const char* host, UINT16 port, const char* common_name, const char* subject,
+    const char* issuer, const char* fingerprint, const char* old_subject, const char* old_issuer,
+    const char* old_fingerprint, DWORD flags)
 {
 	/* TODO: Add trust level to proxy configurable settings */
 	return 1;
@@ -361,20 +515,39 @@ static BOOL pf_client_client_new(freerdp* instance, rdpContext* context)
 	instance->VerifyCertificateEx = pf_client_verify_certificate_ex;
 	instance->VerifyChangedCertificateEx = pf_client_verify_changed_certificate_ex;
 	instance->LogonErrorInfo = pf_logon_error_info;
+
 	return TRUE;
+}
+
+static void pf_client_client_free(freerdp* instance, rdpContext* context)
+{
+	pClientContext* pc = (pClientContext*)context;
+
+	if (!pc)
+		return;
+
+	free(pc->frames_dir);
+	pc->frames_dir = NULL;
 }
 
 static int pf_client_client_stop(rdpContext* context)
 {
-	pClientContext* pc = (pClientContext*) context;
-	pServerContext* ps = pc->pdata->ps;
+	pClientContext* pc = (pClientContext*)context;
+	proxyData* pdata = pc->pdata;
+
+	WLog_DBG(TAG, "aborting client connection");
+	proxy_data_abort_connect(pdata);
 	freerdp_abort_connect(context->instance);
 
-	if (ps->thread)
+	if (pdata->client_thread)
 	{
-		WaitForSingleObject(ps->thread, INFINITE);
-		CloseHandle(ps->thread);
-		ps->thread = NULL;
+		/*
+		 * Wait for client thread to finish. No need to call CloseHandle() here, as
+		 * it is the responsibility of `proxy_data_free`.
+		 */
+		WLog_DBG(TAG, "pf_client_client_stop(): waiting for thread to finish");
+		WaitForSingleObject(pdata->client_thread, INFINITE);
+		WLog_DBG(TAG, "pf_client_client_stop(): thread finished");
 	}
 
 	return 0;
@@ -389,6 +562,7 @@ int RdpClientEntry(RDP_CLIENT_ENTRY_POINTS* pEntryPoints)
 	pEntryPoints->ContextSize = sizeof(pClientContext);
 	/* Client init and finish */
 	pEntryPoints->ClientNew = pf_client_client_new;
+	pEntryPoints->ClientFree = pf_client_client_free;
 	pEntryPoints->ClientStop = pf_client_client_stop;
 	return 0;
 }

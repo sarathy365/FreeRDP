@@ -35,7 +35,7 @@ HANDLE wf_myrtille_connect(wfContext* wfc);
 void wf_myrtille_send_screen(wfContext* wfc);
 void wf_myrtille_send_region(wfContext* wfc, RECT region);
 void wf_myrtille_send_cursor(wfContext* wfc);
-//void wf_myrtille_read_client_clipboard(wfContext* wfc, const wchar_t** text, size_t* size);
+void wf_myrtille_read_client_clipboard(wfContext* wfc, const wchar_t** text, size_t* size);
 void wf_myrtille_read_server_clipboard(wfContext* wfc);
 void wf_myrtille_send_server_clipboard(wfContext* wfc, BYTE* data, size_t size);
 void wf_myrtille_send_printjob(wfContext* wfc, wchar_t* printJobName);

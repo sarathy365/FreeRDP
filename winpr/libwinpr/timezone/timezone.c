@@ -33,11 +33,8 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Table generated with TimeZones.csx */
-#include "TimeZones.c"
-
-/* Table generated with WindowsZones.csx */
-#include "WindowsZones.c"
+#include "TimeZones.h"
+#include "WindowsZones.h"
 
 static UINT64 winpr_windows_gmtime(void)
 {
@@ -70,7 +67,7 @@ static char* winpr_read_unix_timezone_identifier_from_file(FILE* fp)
 	if (length < 2)
 		return NULL;
 
-	tzid = (char*) malloc((size_t)length + 1);
+	tzid = (char*)malloc((size_t)length + 1);
 
 	if (!tzid)
 		return NULL;
@@ -91,11 +88,7 @@ static char* winpr_read_unix_timezone_identifier_from_file(FILE* fp)
 
 static char* winpr_get_timezone_from_link(void)
 {
-	const char* links[] =
-	{
-		"/etc/localtime",
-		"/etc/TZ"
-	};
+	const char* links[] = { "/etc/localtime", "/etc/TZ" };
 	size_t x;
 	ssize_t len;
 	char buf[1024];
@@ -136,7 +129,7 @@ static char* winpr_get_timezone_from_link(void)
 				return NULL;
 
 			alloc = (size_t)len - (size_t)pos;
-			tzid = (char*) malloc(alloc + 1);
+			tzid = (char*)malloc(alloc + 1);
 
 			if (!tzid)
 				return NULL;
@@ -179,8 +172,8 @@ static char* winpr_get_android_timezone_identifier(void)
 		if (!jObjClass)
 			goto fail;
 
-		jDefaultTimezone = (*jniEnv)->GetStaticMethodID(jniEnv, jObjClass, "getDefault",
-		                   "()Ljava/util/TimeZone;");
+		jDefaultTimezone =
+		    (*jniEnv)->GetStaticMethodID(jniEnv, jObjClass, "getDefault", "()Ljava/util/TimeZone;");
 
 		if (!jDefaultTimezone)
 			goto fail;
@@ -190,7 +183,8 @@ static char* winpr_get_android_timezone_identifier(void)
 		if (!jObj)
 			goto fail;
 
-		jTimezoneIdentifier = (*jniEnv)->GetMethodID(jniEnv, jObjClass, "getID", "()Ljava/lang/String;");
+		jTimezoneIdentifier =
+		    (*jniEnv)->GetMethodID(jniEnv, jObjClass, "getID", "()Ljava/lang/String;");
 
 		if (!jTimezoneIdentifier)
 			goto fail;
@@ -245,7 +239,7 @@ static char* winpr_get_unix_timezone_identifier_from_file(void)
 		return NULL;
 
 	tzid = winpr_read_unix_timezone_identifier_from_file(fp);
-	fclose(fp) ;
+	fclose(fp);
 	return tzid;
 #endif
 }
@@ -280,7 +274,7 @@ static TIME_ZONE_ENTRY* winpr_detect_windows_time_zone(void)
 {
 	size_t i, j;
 	char* tzid;
-	TIME_ZONE_ENTRY* timezone;
+
 	tzid = winpr_get_unix_timezone_identifier_from_file();
 
 	if (tzid == NULL)
@@ -289,17 +283,21 @@ static TIME_ZONE_ENTRY* winpr_detect_windows_time_zone(void)
 	if (tzid == NULL)
 		return NULL;
 
-	for (i = 0; i < ARRAYSIZE(TimeZoneTable); i++)
+	for (i = 0; i < TimeZoneTableNrElements; i++)
 	{
-		for (j = 0; j < ARRAYSIZE(WindowsTimeZoneIdTable); j++)
+		const TIME_ZONE_ENTRY* tze = &TimeZoneTable[i];
+
+		for (j = 0; j < WindowsTimeZoneIdTableNrElements; j++)
 		{
-			if (strcmp(TimeZoneTable[i].Id, WindowsTimeZoneIdTable[j].windows) != 0)
+			const WINDOWS_TZID_ENTRY* wzid = &WindowsTimeZoneIdTable[j];
+
+			if (strcmp(tze->Id, wzid->windows) != 0)
 				continue;
 
-			if (winpr_match_unix_timezone_identifier_with_list(tzid, WindowsTimeZoneIdTable[j].tzid))
+			if (winpr_match_unix_timezone_identifier_with_list(tzid, wzid->tzid))
 			{
+				TIME_ZONE_ENTRY* timezone = (TIME_ZONE_ENTRY*)malloc(sizeof(TIME_ZONE_ENTRY));
 				free(tzid);
-				timezone = (TIME_ZONE_ENTRY*) malloc(sizeof(TIME_ZONE_ENTRY));
 
 				if (!timezone)
 					return NULL;
@@ -310,13 +308,13 @@ static TIME_ZONE_ENTRY* winpr_detect_windows_time_zone(void)
 		}
 	}
 
-	WLog_ERR(TAG,  "Unable to find a match for unix timezone: %s", tzid);
+	WLog_ERR(TAG, "Unable to find a match for unix timezone: %s", tzid);
 	free(tzid);
 	return NULL;
 }
 
-static const TIME_ZONE_RULE_ENTRY* winpr_get_current_time_zone_rule(const TIME_ZONE_RULE_ENTRY*
-        rules, UINT32 count)
+static const TIME_ZONE_RULE_ENTRY*
+winpr_get_current_time_zone_rule(const TIME_ZONE_RULE_ENTRY* rules, UINT32 count)
 {
 	UINT32 i;
 	UINT64 windows_time;
@@ -326,12 +324,13 @@ static const TIME_ZONE_RULE_ENTRY* winpr_get_current_time_zone_rule(const TIME_Z
 	{
 		if ((rules[i].TicksStart >= windows_time) && (windows_time >= rules[i].TicksEnd))
 		{
-			/*WLog_ERR(TAG,  "Got rule %d from table at %p with count %"PRIu32"", i, (void*) rules, count);*/
+			/*WLog_ERR(TAG,  "Got rule %d from table at %p with count %"PRIu32"", i, (void*) rules,
+			 * count);*/
 			return &rules[i];
 		}
 	}
 
-	WLog_ERR(TAG,  "Unable to get current timezone rule");
+	WLog_ERR(TAG, "Unable to get current timezone rule");
 	return NULL;
 }
 
@@ -362,8 +361,8 @@ DWORD GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation)
 	if (dtz != NULL)
 	{
 		int status;
-		WLog_DBG(TAG, "tz: Bias=%"PRId32" sn='%s' dln='%s'",
-		         dtz->Bias, dtz->StandardName, dtz->DaylightName);
+		WLog_DBG(TAG, "tz: Bias=%" PRId32 " sn='%s' dln='%s'", dtz->Bias, dtz->StandardName,
+		         dtz->DaylightName);
 		tz->Bias = dtz->Bias;
 		tz->StandardBias = 0;
 		tz->DaylightBias = 0;
@@ -389,8 +388,8 @@ DWORD GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation)
 
 		if ((dtz->SupportsDST) && (dtz->RuleTableCount > 0))
 		{
-			const TIME_ZONE_RULE_ENTRY* rule = winpr_get_current_time_zone_rule(dtz->RuleTable,
-			                                   dtz->RuleTableCount);
+			const TIME_ZONE_RULE_ENTRY* rule =
+			    winpr_get_current_time_zone_rule(dtz->RuleTable, dtz->RuleTableCount);
 
 			if (rule != NULL)
 			{
@@ -407,7 +406,7 @@ DWORD GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation)
 	}
 
 	/* could not detect timezone, use computed bias from tm_gmtoff */
-	WLog_DBG(TAG, "tz not found, using computed bias %"PRId32".", tz->Bias);
+	WLog_DBG(TAG, "tz not found, using computed bias %" PRId32 ".", tz->Bias);
 out_error:
 	free(dtz);
 	memcpy(tz->StandardName, L"Client Local Time", sizeof(tz->StandardName));
@@ -459,7 +458,9 @@ BOOL TzSpecificLocalTimeToSystemTime(LPTIME_ZONE_INFORMATION lpTimeZoneInformati
  * GetDynamicTimeZoneInformation is provided by the SDK if _WIN32_WINNT >= 0x0600 in SDKs above 7.1A
  * and incorrectly if _WIN32_WINNT >= 0x0501 in older SDKs
  */
-#if !defined(_WIN32) || (defined(_WIN32) && (defined(NTDDI_WIN8) && _WIN32_WINNT < 0x0600 || !defined(NTDDI_WIN8) && _WIN32_WINNT < 0x0501)) /* Windows Vista */
+#if !defined(_WIN32) ||                                                  \
+    (defined(_WIN32) && (defined(NTDDI_WIN8) && _WIN32_WINNT < 0x0600 || \
+                         !defined(NTDDI_WIN8) && _WIN32_WINNT < 0x0501)) /* Windows Vista */
 
 DWORD GetDynamicTimeZoneInformation(PDYNAMIC_TIME_ZONE_INFORMATION pTimeZoneInformation)
 {
@@ -516,9 +517,8 @@ DWORD EnumDynamicTimeZoneInformation(const DWORD dwIndex,
 	return 0;
 }
 
-DWORD GetDynamicTimeZoneInformationEffectiveYears(const PDYNAMIC_TIME_ZONE_INFORMATION
-        lpTimeZoneInformation,
-        LPDWORD FirstYear, LPDWORD LastYear)
+DWORD GetDynamicTimeZoneInformationEffectiveYears(
+    const PDYNAMIC_TIME_ZONE_INFORMATION lpTimeZoneInformation, LPDWORD FirstYear, LPDWORD LastYear)
 {
 	WINPR_UNUSED(lpTimeZoneInformation);
 	WINPR_UNUSED(FirstYear);

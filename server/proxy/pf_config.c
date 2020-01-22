@@ -2,7 +2,6 @@
  * FreeRDP: A Remote Desktop Protocol Implementation
  * FreeRDP Proxy Server
  *
- * Copyright 2019 Mati Shabtay <matishabtay@gmail.com>
  * Copyright 2019 Kobi Mizrachi <kmizrachi18@gmail.com>
  * Copyright 2019 Idan Freiberg <speidy@gmail.com>
  *
@@ -27,88 +26,217 @@
 #include "pf_log.h"
 #include "pf_server.h"
 #include "pf_config.h"
+#include "pf_modules.h"
 
 #define TAG PROXY_TAG("config")
 
-#define CHANNELS_SEPERATOR ","
+#define CONFIG_PRINT_SECTION(section) WLog_INFO(TAG, "\t%s:", section)
+#define CONFIG_PRINT_STR(config, key) WLog_INFO(TAG, "\t\t%s: %s", #key, config->key)
+#define CONFIG_PRINT_BOOL(config, key) \
+	WLog_INFO(TAG, "\t\t%s: %s", #key, config->key ? "TRUE" : "FALSE")
+#define CONFIG_PRINT_UINT16(config, key) WLog_INFO(TAG, "\t\t%s: %" PRIu16 "", #key, config->key)
+#define CONFIG_PRINT_UINT32(config, key) WLog_INFO(TAG, "\t\t%s: %" PRIu32 "", #key, config->key)
 
-wArrayList* parse_string_array_from_str(const char* str)
+BOOL pf_config_get_uint16(wIniFile* ini, const char* section, const char* key, UINT16* result)
 {
-	wArrayList* list = ArrayList_New(FALSE);
-	char* s;
-	char* temp;
-	char* token;
+	int val;
 
-	if (list == NULL)
+	val = IniFile_GetKeyValueInt(ini, section, key);
+	if ((val < 0) || (val > UINT16_MAX))
 	{
-		WLog_ERR(TAG, "parse_string_array_from_str(): ArrayList_New failed!");
-		return NULL;
+		WLog_ERR(TAG, "[%s]: invalid value %d for key '%s.%s'.", __FUNCTION__, val, section, key);
+		return FALSE;
 	}
 
-	
- 	temp = s = _strdup(str);
-	if (!s)
-	{
-		WLog_ERR(TAG, "parse_string_array_from_str(): strdup failed!");
-		return NULL;
-	}
-
-	if (s == NULL)
-	{
-		WLog_ERR(TAG, "parse_string_array_from_str(): strdup failed!");
-		goto error;
-	}
-
-	while ((token = StrSep(&temp, CHANNELS_SEPERATOR)) != NULL)
-	{
-		char* current_token = _strdup(token);
-
-		if (current_token == NULL)
-		{
-			WLog_ERR(TAG, "parse_string_array_from_str(): strdup failed!");
-			goto error;
-		}
-
-		if (ArrayList_Add(list, current_token) < 0)
-		{
-			free(current_token);
-			goto error;
-		}
-	}
-
-	free(s);
-	return list;
-error:
-	free(s);
-	ArrayList_Free(list);
-	return NULL;
+	*result = (UINT16)val;
+	return TRUE;
 }
 
-static BOOL pf_server_is_config_valid(proxyConfig* config)
+BOOL pf_config_get_uint32(wIniFile* ini, const char* section, const char* key, UINT32* result)
 {
-	if (config->Host == NULL)
+	int val;
+
+	val = IniFile_GetKeyValueInt(ini, section, key);
+	if ((val < 0) || (val > INT32_MAX))
 	{
-		WLog_ERR(TAG, "Configuration value for `Server.Host` is not valid");
+		WLog_ERR(TAG, "[%s]: invalid value %d for key '%s.%s'.", __FUNCTION__, val, section, key);
 		return FALSE;
 	}
 
-	if (config->Port <= 0)
+	*result = (UINT32)val;
+	return TRUE;
+}
+
+BOOL pf_config_get_bool(wIniFile* ini, const char* section, const char* key)
+{
+	int num_value;
+	const char* str_value;
+
+	str_value = IniFile_GetKeyValueString(ini, section, key);
+	if (!str_value)
 	{
-		WLog_ERR(TAG, "Configuration value for `Server.Port` is not valid");
+		WLog_WARN(TAG, "[%s]: key '%s.%s' not found, value defaults to false.", __FUNCTION__, key,
+		          section);
 		return FALSE;
 	}
 
-	if (!config->UseLoadBalanceInfo)
+	if (strcmp(str_value, "TRUE") == 0 || strcmp(str_value, "true") == 0)
+		return TRUE;
+
+	num_value = IniFile_GetKeyValueInt(ini, section, key);
+
+	if (num_value == 1)
+		return TRUE;
+
+	return FALSE;
+}
+
+const char* pf_config_get_str(wIniFile* ini, const char* section, const char* key)
+{
+	const char* value;
+
+	value = IniFile_GetKeyValueString(ini, section, key);
+
+	if (!value)
 	{
-		if (config->TargetHost == NULL)
+		WLog_ERR(TAG, "[%s]: key '%s.%s' not found.", __FUNCTION__, key, section);
+		return NULL;
+	}
+
+	return value;
+}
+
+static BOOL pf_config_load_server(wIniFile* ini, proxyConfig* config)
+{
+	const char* host;
+
+	if (!pf_config_get_uint16(ini, "Server", "Port", &config->Port))
+		return FALSE;
+
+	host = pf_config_get_str(ini, "Server", "Host");
+
+	if (!host)
+		return FALSE;
+
+	config->Host = _strdup(host);
+
+	if (!config->Host)
+		return FALSE;
+
+	return TRUE;
+}
+
+static BOOL pf_config_load_target(wIniFile* ini, proxyConfig* config)
+{
+	const char* target_host;
+
+	if (!pf_config_get_uint16(ini, "Target", "Port", &config->TargetPort))
+		return FALSE;
+
+	target_host = pf_config_get_str(ini, "Target", "Host");
+
+	if (!target_host)
+		return FALSE;
+
+	config->TargetHost = _strdup(target_host);
+	if (!config->TargetHost)
+		return FALSE;
+
+	config->UseLoadBalanceInfo = pf_config_get_bool(ini, "Target", "UseLoadBalanceInfo");
+	return TRUE;
+}
+
+static BOOL pf_config_load_channels(wIniFile* ini, proxyConfig* config)
+{
+	config->GFX = pf_config_get_bool(ini, "Channels", "GFX");
+	config->DisplayControl = pf_config_get_bool(ini, "Channels", "DisplayControl");
+	config->Clipboard = pf_config_get_bool(ini, "Channels", "Clipboard");
+	config->AudioOutput = pf_config_get_bool(ini, "Channels", "AudioOutput");
+	config->RemoteApp = pf_config_get_bool(ini, "Channels", "RemoteApp");
+	return TRUE;
+}
+
+static BOOL pf_config_load_input(wIniFile* ini, proxyConfig* config)
+{
+	config->Keyboard = pf_config_get_bool(ini, "Input", "Keyboard");
+	config->Mouse = pf_config_get_bool(ini, "Input", "Mouse");
+	return TRUE;
+}
+
+static BOOL pf_config_load_security(wIniFile* ini, proxyConfig* config)
+{
+	config->ServerTlsSecurity = pf_config_get_bool(ini, "Security", "ServerTlsSecurity");
+	config->ServerRdpSecurity = pf_config_get_bool(ini, "Security", "ServerRdpSecurity");
+
+	config->ClientTlsSecurity = pf_config_get_bool(ini, "Security", "ClientTlsSecurity");
+	config->ClientNlaSecurity = pf_config_get_bool(ini, "Security", "ClientNlaSecurity");
+	config->ClientRdpSecurity = pf_config_get_bool(ini, "Security", "ClientRdpSecurity");
+	return TRUE;
+}
+
+static BOOL pf_config_load_clipboard(wIniFile* ini, proxyConfig* config)
+{
+	config->TextOnly = pf_config_get_bool(ini, "Clipboard", "TextOnly");
+
+	if (!pf_config_get_uint32(ini, "Clipboard", "MaxTextLength", &config->MaxTextLength))
+		return FALSE;
+
+	return TRUE;
+}
+
+static BOOL pf_config_load_modules(wIniFile* ini, proxyConfig* config)
+{
+	int index;
+	int modules_count = 0;
+	char** module_names = NULL;
+
+	module_names = IniFile_GetSectionKeyNames(ini, "Modules", &modules_count);
+
+	for (index = 0; index < modules_count; index++)
+	{
+		char* module_name = module_names[index];
+		const char* path = pf_config_get_str(ini, "Modules", module_name);
+
+		if (!path)
+			continue;
+
+		if (!pf_modules_register_new(path, module_name))
 		{
-			WLog_ERR(TAG, "Configuration value for `Target.Host` is not valid");
-			return FALSE;
+			WLog_ERR(TAG, "pf_config_load_modules(): failed to register %s (%s)", module_name,
+			         path);
+			continue;
 		}
 
-		if (config->TargetPort <= 0)
+		WLog_INFO(TAG, "module '%s' is loaded!", module_name);
+	}
+
+	free(module_names);
+	return TRUE;
+}
+
+static BOOL pf_config_load_captures(wIniFile* ini, proxyConfig* config)
+{
+	const char* captures_dir;
+
+	config->SessionCapture = pf_config_get_bool(ini, "SessionCapture", "Enabled");
+	if (!config->SessionCapture)
+		return TRUE;
+
+	captures_dir = pf_config_get_str(ini, "SessionCapture", "CapturesDirectory");
+
+	if (!captures_dir)
+		return FALSE;
+
+	config->CapturesDirectory = strdup(captures_dir);
+	if (!config->CapturesDirectory)
+		return FALSE;
+
+	if (!PathFileExistsA(config->CapturesDirectory))
+	{
+		if (!CreateDirectoryA(config->CapturesDirectory, NULL))
 		{
-			WLog_ERR(TAG, "Configuration value for `Target.Port` is not valid");
+			free(config->CapturesDirectory);
+			config->CapturesDirectory = NULL;
 			return FALSE;
 		}
 	}
@@ -116,109 +244,102 @@ static BOOL pf_server_is_config_valid(proxyConfig* config)
 	return TRUE;
 }
 
-DWORD pf_server_load_config(const char* path, proxyConfig* config)
+BOOL pf_server_config_load(const char* path, proxyConfig* config)
 {
-	const char* input;
-	char** filters_names;
-	int rc;
-	int filters_count = 0;
-	UINT32 index;
-	DWORD result = CONFIG_PARSE_ERROR;
+	BOOL ok = FALSE;
 	wIniFile* ini = IniFile_New();
 
 	if (!ini)
-		return CONFIG_PARSE_ERROR;
+	{
+		WLog_ERR(TAG, "pf_server_load_config(): IniFile_New() failed!");
+		return FALSE;
+	}
 
 	if (IniFile_ReadFile(ini, path) < 0)
-		goto out;
-
-	/* server */
-	config->Host = _strdup(IniFile_GetKeyValueString(ini, "Server", "Host"));
-	config->LocalOnly = IniFile_GetKeyValueInt(ini, "Server", "LocalOnly");
-	rc = IniFile_GetKeyValueInt(ini, "Server", "Port");
-
-	if ((rc < 0) || (rc > UINT16_MAX))
-		goto out;
-
-	config->Port = (UINT16)rc;
-	/* target */
-	config->UseLoadBalanceInfo = IniFile_GetKeyValueInt(ini, "Target", "UseLoadBalanceInfo");
-	config->TargetHost = _strdup(IniFile_GetKeyValueString(ini, "Target", "Host"));
-	rc = IniFile_GetKeyValueInt(ini, "Target", "Port");
-
-	if ((rc < 0) || (rc > UINT16_MAX))
-		goto out;
-
-	config->TargetPort = (UINT16)rc;
-	/* graphics */
-	config->GFX = IniFile_GetKeyValueInt(ini, "Graphics", "GFX");
-	config->BitmapUpdate = IniFile_GetKeyValueInt(ini, "Graphics", "BitmapUpdate");
-	/* input */
-	config->Keyboard = IniFile_GetKeyValueInt(ini, "Input", "Keyboard");
-	config->Mouse = IniFile_GetKeyValueInt(ini, "Input", "Mouse");
-	/* security */
-	config->TlsSecurity = IniFile_GetKeyValueInt(ini, "Security", "TlsSecurity");
-	config->NlaSecurity = IniFile_GetKeyValueInt(ini, "Security", "NlaSecurity");
-	config->RdpSecurity = IniFile_GetKeyValueInt(ini, "Security", "RdpSecurity");
-	/* channels filtering */
-	config->WhitelistMode = IniFile_GetKeyValueInt(ini, "Channels", "WhitelistMode");
-	input = IniFile_GetKeyValueString(ini, "Channels", "AllowedChannels");
-	/* filters api */
-
-	if (input)
 	{
-		config->AllowedChannels = parse_string_array_from_str(input);
-
-		if (config->AllowedChannels == NULL)
-			goto out;
+		WLog_ERR(TAG, "pf_server_load_config(): IniFile_ReadFile() failed!");
+		goto out;
 	}
 
-	input = IniFile_GetKeyValueString(ini, "Channels", "DeniedChannels");
-
-	if (input)
-	{
-		config->BlockedChannels = parse_string_array_from_str(input);
-
-		if (config->BlockedChannels == NULL)
-			goto out;
-	}
-
-	result = CONFIG_PARSE_SUCCESS;
-
-	if (!pf_filters_init(&config->Filters))
+	if (!pf_config_load_server(ini, config))
 		goto out;
-		
-	filters_names = IniFile_GetSectionKeyNames(ini, "Filters", &filters_count);
 
-	for (index = 0; index < filters_count; index++)
-	{
-		char* filter_name = filters_names[index];
-		const char* path = IniFile_GetKeyValueString(ini, "Filters", filter_name);
+	if (!pf_config_load_target(ini, config))
+		goto out;
 
-		if (!pf_filters_register_new(config->Filters, path, filter_name))
-		{
-			WLog_DBG(TAG, "pf_server_load_config(): failed to register %s (%s)", filter_name, path);
-		}
-		else
-		{
-			WLog_DBG(TAG, "pf_server_load_config(): registered filter %s (%s) successfully", filter_name, path);
-		}
-	}
+	if (!pf_config_load_channels(ini, config))
+		goto out;
 
+	if (!pf_config_load_input(ini, config))
+		goto out;
+
+	if (!pf_config_load_security(ini, config))
+		goto out;
+
+	if (!pf_config_load_modules(ini, config))
+		goto out;
+
+	if (!pf_config_load_clipboard(ini, config))
+		goto out;
+
+	if (!pf_config_load_captures(ini, config))
+		goto out;
+
+	ok = TRUE;
 out:
 	IniFile_Free(ini);
+	return ok;
+}
 
-	if (!pf_server_is_config_valid(config))
-		return CONFIG_INVALID;
+void pf_server_config_print(proxyConfig* config)
+{
+	WLog_INFO(TAG, "Proxy configuration:");
 
-	return result;
+	CONFIG_PRINT_SECTION("Server");
+	CONFIG_PRINT_STR(config, Host);
+	CONFIG_PRINT_UINT16(config, Port);
+	CONFIG_PRINT_BOOL(config, SessionCapture);
+
+	if (!config->UseLoadBalanceInfo)
+	{
+		CONFIG_PRINT_SECTION("Target");
+		CONFIG_PRINT_STR(config, TargetHost);
+		CONFIG_PRINT_UINT16(config, TargetPort);
+	}
+
+	CONFIG_PRINT_SECTION("Input");
+	CONFIG_PRINT_BOOL(config, Keyboard);
+	CONFIG_PRINT_BOOL(config, Mouse);
+
+	CONFIG_PRINT_SECTION("Server Security");
+	CONFIG_PRINT_BOOL(config, ServerTlsSecurity);
+	CONFIG_PRINT_BOOL(config, ServerRdpSecurity);
+
+	CONFIG_PRINT_SECTION("Client Security");
+	CONFIG_PRINT_BOOL(config, ClientNlaSecurity);
+	CONFIG_PRINT_BOOL(config, ClientTlsSecurity);
+	CONFIG_PRINT_BOOL(config, ClientRdpSecurity);
+
+	CONFIG_PRINT_SECTION("Channels");
+	CONFIG_PRINT_BOOL(config, GFX);
+	CONFIG_PRINT_BOOL(config, DisplayControl);
+	CONFIG_PRINT_BOOL(config, Clipboard);
+	CONFIG_PRINT_BOOL(config, AudioOutput);
+	CONFIG_PRINT_BOOL(config, RemoteApp);
+
+	CONFIG_PRINT_SECTION("Clipboard");
+	CONFIG_PRINT_BOOL(config, TextOnly);
+	if (config->MaxTextLength > 0)
+		CONFIG_PRINT_UINT32(config, MaxTextLength);
+
+	CONFIG_PRINT_SECTION("SessionCapture");
+	CONFIG_PRINT_BOOL(config, SessionCapture);
+	CONFIG_PRINT_STR(config, CapturesDirectory);
 }
 
 void pf_server_config_free(proxyConfig* config)
 {
-	pf_filters_unregister_all(config->Filters);
-	ArrayList_Free(config->AllowedChannels);
-	ArrayList_Free(config->BlockedChannels);
+	free(config->CapturesDirectory);
 	free(config->TargetHost);
 	free(config->Host);
 	free(config);

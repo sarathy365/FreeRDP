@@ -41,7 +41,6 @@
 #include <freerdp/server/rdpgfx.h>
 
 #include "pf_server.h"
-#include "pf_common.h"
 #include "pf_log.h"
 #include "pf_config.h"
 #include "pf_client.h"
@@ -50,34 +49,19 @@
 #include "pf_update.h"
 #include "pf_rdpgfx.h"
 #include "pf_disp.h"
+#include "pf_rail.h"
+#include "pf_channels.h"
 
 #define TAG PROXY_TAG("server")
 
-static void pf_server_handle_client_disconnection(freerdp_peer* client)
+static BOOL pf_server_parse_target_from_routing_token(rdpContext* context, char** target,
+                                                      DWORD* port)
 {
-	pServerContext* ps = (pServerContext*)client->context;
-	rdpContext* pc = (rdpContext*) ps->pdata->pc;
-	proxyData* pdata = ps->pdata;
-	WLog_INFO(TAG, "Connection with %s was closed; closing proxy's client <> target server connection %s",
-	          client->hostname, pc->settings->ServerHostname);
-	/* Mark connection closed for sContext */
-	SetEvent(pdata->connectionClosed);
-	freerdp_abort_connect(pc->instance);
-	/* Close connection to remote host */
-	WLog_DBG(TAG, "Waiting for proxy's client thread to finish");
-	WaitForSingleObject(ps->thread, INFINITE);
-	CloseHandle(ps->thread);
-	ps->thread = NULL;
-}
-
-static BOOL pf_server_parse_target_from_routing_token(rdpContext* context,
-        char** target, DWORD* port)
-{
-#define TARGET_MAX	(100)
+#define TARGET_MAX (100)
 #define ROUTING_TOKEN_PREFIX "Cookie: msts="
 	char* colon;
 	size_t len;
-	const size_t prefix_len  = strlen(ROUTING_TOKEN_PREFIX);
+	const size_t prefix_len = strnlen(ROUTING_TOKEN_PREFIX, sizeof(ROUTING_TOKEN_PREFIX));
 	DWORD routing_token_length;
 	const char* routing_token = freerdp_nego_get_routing_token(context, &routing_token_length);
 
@@ -89,8 +73,11 @@ static BOOL pf_server_parse_target_from_routing_token(rdpContext* context,
 
 	if ((routing_token_length <= prefix_len) || (routing_token_length >= TARGET_MAX))
 	{
-		WLog_ERR(TAG, "pf_server_parse_target_from_routing_token(): invalid routing token length: %"PRIu32"",
-		         routing_token_length);
+		WLog_ERR(
+		    TAG,
+		    "pf_server_parse_target_from_routing_token(): invalid routing token length: %" PRIu32
+		    "",
+		    routing_token_length);
 		return FALSE;
 	}
 
@@ -126,7 +113,7 @@ static BOOL pf_server_get_target_info(rdpContext* context, rdpSettings* settings
                                       proxyConfig* config)
 {
 	WLog_INFO(TAG, "pf_server_get_target_info(): fetching target from %s",
-		config->UseLoadBalanceInfo ? "load-balance-info" : "config");
+	          config->UseLoadBalanceInfo ? "load-balance-info" : "config");
 
 	if (config->UseLoadBalanceInfo)
 		return pf_server_parse_target_from_routing_token(context, &settings->ServerHostname,
@@ -154,41 +141,55 @@ static BOOL pf_server_get_target_info(rdpContext* context, rdpSettings* settings
 static BOOL pf_server_post_connect(freerdp_peer* client)
 {
 	pServerContext* ps;
-	rdpContext* pc;
+	pClientContext* pc;
+	rdpSettings* client_settings;
 	proxyData* pdata;
 	ps = (pServerContext*)client->context;
 	pdata = ps->pdata;
 
-	pc = p_client_context_create(client->settings);
-	if (pc == NULL)
+	if (pdata->config->SessionCapture && !client->settings->SupportGraphicsPipeline)
 	{
-		WLog_ERR(TAG, "pf_server_post_connect(): p_client_context_create failed!");
+		WLog_ERR(TAG, "Session capture feature is enabled, only accepting connections with GFX");
 		return FALSE;
 	}
 
-	/* keep both sides of the connection in pdata */
-	((pClientContext*)pc)->pdata = ps->pdata;
-	pdata->pc = (pClientContext*)pc;
+	pc = pf_context_create_client_context(client->settings);
+	if (pc == NULL)
+	{
+		WLog_ERR(TAG, "pf_server_post_connect(): pf_context_create_client_context failed!");
+		return FALSE;
+	}
 
-	if (!pf_server_get_target_info(client->context, pc->settings, pdata->config))
+	client_settings = pc->context.settings;
+
+	/* keep both sides of the connection in pdata */
+	pc->pdata = ps->pdata;
+	pdata->pc = pc;
+
+	if (!pf_server_get_target_info(client->context, client_settings, pdata->config))
 	{
 		WLog_ERR(TAG, "pf_server_post_connect(): pf_server_get_target_info failed!");
 		return FALSE;
 	}
 
-	WLog_INFO(TAG, "pf_server_post_connect(): target == %s:%"PRIu16"", pc->settings->ServerHostname,
-	      pc->settings->ServerPort);
+	WLog_INFO(TAG, "pf_server_post_connect(): target == %s:%" PRIu16 "",
+	          client_settings->ServerHostname, client_settings->ServerPort);
 
-	pf_server_rdpgfx_init(ps);
-	pf_server_disp_init(ps);
+	if (!pf_server_channels_init(ps))
+	{
+		WLog_ERR(TAG, "pf_server_post_connect(): failed to initialize server's channels!");
+		return FALSE;
+	}
 
 	/* Start a proxy's client in it's own thread */
-	if (!(ps->thread = CreateThread(NULL, 0, pf_client_start, pc, 0, NULL)))
+	if (!(pdata->client_thread = CreateThread(NULL, 0, pf_client_start, pc, 0, NULL)))
 	{
 		WLog_ERR(TAG, "CreateThread failed!");
 		return FALSE;
 	}
 
+	pf_server_register_input_callbacks(client->input);
+	pf_server_register_update_callbacks(client->update);
 	return TRUE;
 }
 
@@ -222,15 +223,10 @@ static DWORD WINAPI pf_server_handle_client(LPVOID arg)
 	proxyConfig* config;
 	freerdp_peer* client = (freerdp_peer*)arg;
 
-	if (!init_p_server_context(client))
+	if (!pf_context_init_server_context(client))
 		goto out_free_peer;
 
 	ps = (pServerContext*)client->context;
-	if (!(ps->dynvcReady = CreateEvent(NULL, TRUE, FALSE, NULL)))
-	{
-		WLog_ERR(TAG, "pf_server_post_connect(): CreateEvent failed!");
-		goto out_free_peer;
-	}
 
 	if (!(pdata = ps->pdata = proxy_data_new()))
 	{
@@ -238,18 +234,29 @@ static DWORD WINAPI pf_server_handle_client(LPVOID arg)
 		goto out_free_peer;
 	}
 
+	pdata->ps = ps;
+	config = pdata->config = client->ContextExtra;
+
 	/* currently not supporting GDI orders */
 	ZeroMemory(client->settings->OrderSupport, 32);
 	client->update->autoCalculateBitmapData = FALSE;
-	pdata->ps = ps;
-	/* keep configuration in proxyData */
-	pdata->config = client->ContextExtra;
-	config = pdata->config;
+
+	client->settings->SupportMonitorLayoutPdu = TRUE;
 	client->settings->SupportGraphicsPipeline = config->GFX;
-	client->settings->SupportDynamicChannels = TRUE;
 	client->settings->CertificateFile = _strdup("server.crt");
 	client->settings->PrivateKeyFile = _strdup("server.key");
 	client->settings->RdpKeyFile = _strdup("server.key");
+
+	if (config->RemoteApp)
+	{
+		client->settings->RemoteApplicationSupportLevel =
+		    RAIL_LEVEL_SUPPORTED | RAIL_LEVEL_DOCKED_LANGBAR_SUPPORTED |
+		    RAIL_LEVEL_SHELL_INTEGRATION_SUPPORTED | RAIL_LEVEL_LANGUAGE_IME_SYNC_SUPPORTED |
+		    RAIL_LEVEL_SERVER_TO_CLIENT_IME_SYNC_SUPPORTED |
+		    RAIL_LEVEL_HIDE_MINIMIZED_APPS_SUPPORTED | RAIL_LEVEL_WINDOW_CLOAKING_SUPPORTED |
+		    RAIL_LEVEL_HANDSHAKE_EX_SUPPORTED;
+		client->settings->RemoteAppLanguageBarSupported = TRUE;
+	}
 
 	if (!client->settings->CertificateFile || !client->settings->PrivateKeyFile ||
 	    !client->settings->RdpKeyFile)
@@ -258,12 +265,9 @@ static DWORD WINAPI pf_server_handle_client(LPVOID arg)
 		goto out_free_peer;
 	}
 
-	client->settings->SupportDisplayControl = TRUE;
-	client->settings->SupportMonitorLayoutPdu = TRUE;
-	client->settings->DynamicResolutionUpdate = TRUE;
-	client->settings->RdpSecurity = config->RdpSecurity;
-	client->settings->TlsSecurity = config->TlsSecurity;
-	client->settings->NlaSecurity = config->NlaSecurity;
+	client->settings->RdpSecurity = config->ServerRdpSecurity;
+	client->settings->TlsSecurity = config->ServerTlsSecurity;
+	client->settings->NlaSecurity = FALSE; /* currently NLA is not supported in proxy server */
 	client->settings->EncryptionLevel = ENCRYPTION_LEVEL_CLIENT_COMPATIBLE;
 	client->settings->ColorDepth = 32;
 	client->settings->SuppressOutput = TRUE;
@@ -272,8 +276,6 @@ static DWORD WINAPI pf_server_handle_client(LPVOID arg)
 	client->PostConnect = pf_server_post_connect;
 	client->Activate = pf_server_activate;
 	client->AdjustMonitorsLayout = pf_server_adjust_monitor_layout;
-	pf_server_register_input_callbacks(client->input);
-	pf_server_register_update_callbacks(client->update);
 	client->settings->MultifragMaxRequestSize = 0xFFFFFF; /* FIXME */
 	client->Initialize(client);
 	WLog_INFO(TAG, "Client connected: %s", client->local ? "(local)" : client->hostname);
@@ -295,19 +297,13 @@ static DWORD WINAPI pf_server_handle_client(LPVOID arg)
 			eventCount += tmp;
 		}
 		eventHandles[eventCount++] = ChannelEvent;
-		eventHandles[eventCount++] = pdata->connectionClosed;
+		eventHandles[eventCount++] = pdata->abort_event;
 		eventHandles[eventCount++] = WTSVirtualChannelManagerGetEventHandle(ps->vcm);
 		status = WaitForMultipleObjects(eventCount, eventHandles, FALSE, INFINITE);
 
 		if (status == WAIT_FAILED)
 		{
 			WLog_ERR(TAG, "WaitForMultipleObjects failed (errno: %d)", errno);
-			break;
-		}
-
-		if (pf_common_connection_aborted_by_peer(pdata))
-		{
-			WLog_INFO(TAG, "proxy's client disconnected, closing connection with client %s", client->hostname);
 			break;
 		}
 
@@ -323,58 +319,54 @@ static DWORD WINAPI pf_server_handle_client(LPVOID arg)
 			}
 		}
 
+		/* only disconnect after checking client's and vcm's file descriptors  */
+		if (proxy_data_shall_disconnect(pdata))
+		{
+			WLog_INFO(TAG, "abort_event is set, closing connection with client %s",
+			          client->hostname);
+			break;
+		}
+
 		switch (WTSVirtualChannelManagerGetDrdynvcState(ps->vcm))
 		{
-		/* Dynamic channel status may have been changed after processing */
-		case DRDYNVC_STATE_NONE:
+			/* Dynamic channel status may have been changed after processing */
+			case DRDYNVC_STATE_NONE:
 
-			/* Initialize drdynvc channel */
-			if (!WTSVirtualChannelManagerCheckFileDescriptor(ps->vcm))
-			{
-				WLog_ERR(TAG, "Failed to initialize drdynvc channel");
-				goto fail;
-			}
+				/* Initialize drdynvc channel */
+				if (!WTSVirtualChannelManagerCheckFileDescriptor(ps->vcm))
+				{
+					WLog_ERR(TAG, "Failed to initialize drdynvc channel");
+					goto fail;
+				}
 
-			break;
+				break;
 
-		case DRDYNVC_STATE_READY:
-			if (WaitForSingleObject(ps->dynvcReady, 0) == WAIT_TIMEOUT)
-			{
-				SetEvent(ps->dynvcReady);
-			}
+			case DRDYNVC_STATE_READY:
+				if (WaitForSingleObject(ps->dynvcReady, 0) == WAIT_TIMEOUT)
+				{
+					SetEvent(ps->dynvcReady);
+				}
 
-			break;
+				break;
 
-		default:
-			break;
+			default:
+				break;
 		}
 	}
 
 fail:
 
-	if (ps->disp)
-	{
-		if (ps->dispOpened)
-		{
-			WLog_DBG(TAG, "Closing RDPEDISP server");
-			(void)ps->disp->Close(ps->disp);
-		}
-
-		disp_server_context_free(ps->disp);
-	}
-
-	if (ps->gfx)
-		rdpgfx_server_context_free(ps->gfx);
-		
-	if (client->connected && !pf_common_connection_aborted_by_peer(pdata))
-	{
-		pf_server_handle_client_disconnection(client);
-	}
-
-	pc = (rdpContext*) pdata->pc;
+	pc = (rdpContext*)pdata->pc;
+	WLog_INFO(TAG, "pf_server_handle_client(): starting shutdown of connection (client %s)",
+	          client->hostname);
+	WLog_INFO(TAG, "pf_server_handle_client(): stopping proxy's client");
 	freerdp_client_stop(pc);
+	WLog_INFO(TAG, "pf_server_handle_client(): freeing server's channels");
+	pf_server_channels_free(ps);
+	WLog_INFO(TAG, "pf_server_handle_client(): freeing proxy data");
 	proxy_data_free(pdata);
 	freerdp_client_context_free(pc);
+	client->Close(client);
 	client->Disconnect(client);
 out_free_peer:
 	freerdp_peer_context_free(client);
@@ -430,9 +422,6 @@ static void pf_server_mainloop(freerdp_listener* listener)
 
 int pf_server_start(proxyConfig* config)
 {
-	char* localSockPath;
-	char localSockName[MAX_PATH];
-	BOOL success;
 	WSADATA wsaData;
 	freerdp_listener* listener = freerdp_listener_new();
 
@@ -450,32 +439,11 @@ int pf_server_start(proxyConfig* config)
 		return -1;
 	}
 
-	/* Determine filepath for local socket */
-	sprintf_s(localSockName, sizeof(localSockName), "proxy.%" PRIu16 "", config->Port);
-	localSockPath = GetKnownSubPath(KNOWN_PATH_TEMP, localSockName);
-
-	if (!localSockPath)
-	{
-		freerdp_listener_free(listener);
-		WSACleanup();
-		return -1;
-	}
-
-	/* Listen to local connections */
-	success = listener->OpenLocal(listener, localSockPath);
-
-	/* Listen to remote connections */
-	if (!config->LocalOnly)
-	{
-		success &= listener->Open(listener, config->Host, config->Port);
-	}
-
-	if (success)
+	if (listener->Open(listener, config->Host, config->Port))
 	{
 		pf_server_mainloop(listener);
 	}
 
-	free(localSockPath);
 	freerdp_listener_free(listener);
 	WSACleanup();
 	return 0;

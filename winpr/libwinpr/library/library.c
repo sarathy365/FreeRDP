@@ -158,7 +158,7 @@ HMODULE LoadLibraryW(LPCWSTR lpLibFileName)
 HMODULE LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
 	if (dwFlags != 0)
-		WLog_WARN(TAG, "%s does not support dwFlags 0x%08"PRIx32, __FUNCTION__, dwFlags);
+		WLog_WARN(TAG, "%s does not support dwFlags 0x%08" PRIx32, __FUNCTION__, dwFlags);
 
 	if (hFile)
 		WLog_WARN(TAG, "%s does not support hFile != NULL", __FUNCTION__);
@@ -169,7 +169,7 @@ HMODULE LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 HMODULE LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
 	if (dwFlags != 0)
-		WLog_WARN(TAG, "%s does not support dwFlags 0x%08"PRIx32, __FUNCTION__, dwFlags);
+		WLog_WARN(TAG, "%s does not support dwFlags 0x%08" PRIx32, __FUNCTION__, dwFlags);
 
 	if (hFile)
 		WLog_WARN(TAG, "%s does not support hFile != NULL", __FUNCTION__);
@@ -189,7 +189,7 @@ FARPROC GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
 	if (proc == NULL)
 	{
 		WLog_ERR(TAG, "GetProcAddress: could not find procedure %s: %s", lpProcName, dlerror());
-		return (FARPROC) NULL;
+		return (FARPROC)NULL;
 	}
 
 	return proc;
@@ -283,7 +283,7 @@ DWORD GetModuleFileNameA(HMODULE hModule, LPSTR lpFilename, DWORD nSize)
 		}
 
 		buffer[status] = '\0';
-		length = strlen(buffer);
+		length = strnlen(buffer, sizeof(buffer));
 
 		if (length < nSize)
 		{
@@ -321,7 +321,7 @@ DWORD GetModuleFileNameA(HMODULE hModule, LPSTR lpFilename, DWORD nSize)
 		 * so use realpath to find the absolute, canonical path.
 		 */
 		realpath(path, buffer);
-		length = strlen(buffer);
+		length = strnlen(buffer, sizeof(buffer));
 
 		if (length < nSize)
 		{
@@ -343,4 +343,3 @@ DWORD GetModuleFileNameA(HMODULE hModule, LPSTR lpFilename, DWORD nSize)
 }
 
 #endif
-

@@ -24,7 +24,6 @@
 #include <freerdp/primitives.h>
 #include <freerdp/api.h>
 
-
 #ifdef __GNUC__
 #define PRIM_ALIGN_128 __attribute__((aligned(16)))
 #else
@@ -33,20 +32,23 @@
 #endif
 #endif
 
-#if defined(WITH_SSE2) || defined(WITH_NEON)
+#if defined(WITH_SSE2) || defined(WITH_NEON) || defined(WITH_OPENCL)
 #define HAVE_OPTIMIZED_PRIMITIVES 1
+#endif
+
+#if defined(WITH_SSE2) || defined(WITH_NEON)
+#define HAVE_CPU_OPTIMIZED_PRIMITIVES 1
 #endif
 
 #if defined(WITH_SSE2)
 /* Use lddqu for unaligned; load for 16-byte aligned. */
-#define LOAD_SI128(_ptr_) \
-	(((ULONG_PTR) (_ptr_) & 0x0f) \
-	 ? _mm_lddqu_si128((__m128i *) (_ptr_)) \
-	 : _mm_load_si128((__m128i *) (_ptr_)))
+#define LOAD_SI128(_ptr_)                                           \
+	(((ULONG_PTR)(_ptr_)&0x0f) ? _mm_lddqu_si128((__m128i*)(_ptr_)) \
+	                           : _mm_load_si128((__m128i*)(_ptr_)))
 #endif
 
-static INLINE BYTE* writePixelBGRX(BYTE* dst, DWORD formatSize, UINT32 format,
-                                   BYTE R, BYTE G, BYTE B, BYTE A)
+static INLINE BYTE* writePixelBGRX(BYTE* dst, DWORD formatSize, UINT32 format, BYTE R, BYTE G,
+                                   BYTE B, BYTE A)
 {
 	WINPR_UNUSED(formatSize);
 	WINPR_UNUSED(format);
@@ -57,8 +59,8 @@ static INLINE BYTE* writePixelBGRX(BYTE* dst, DWORD formatSize, UINT32 format,
 	return dst;
 }
 
-static INLINE BYTE* writePixelRGBX(BYTE* dst, DWORD formatSize, UINT32 format,
-                                   BYTE R, BYTE G, BYTE B, BYTE A)
+static INLINE BYTE* writePixelRGBX(BYTE* dst, DWORD formatSize, UINT32 format, BYTE R, BYTE G,
+                                   BYTE B, BYTE A)
 {
 	WINPR_UNUSED(formatSize);
 	WINPR_UNUSED(format);
@@ -69,8 +71,8 @@ static INLINE BYTE* writePixelRGBX(BYTE* dst, DWORD formatSize, UINT32 format,
 	return dst;
 }
 
-static INLINE BYTE* writePixelXBGR(BYTE* dst, DWORD formatSize, UINT32 format,
-                                   BYTE R, BYTE G, BYTE B, BYTE A)
+static INLINE BYTE* writePixelXBGR(BYTE* dst, DWORD formatSize, UINT32 format, BYTE R, BYTE G,
+                                   BYTE B, BYTE A)
 {
 	WINPR_UNUSED(formatSize);
 	WINPR_UNUSED(format);
@@ -81,8 +83,8 @@ static INLINE BYTE* writePixelXBGR(BYTE* dst, DWORD formatSize, UINT32 format,
 	return dst;
 }
 
-static INLINE BYTE* writePixelXRGB(BYTE* dst, DWORD formatSize, UINT32 format,
-                                   BYTE R, BYTE G, BYTE B, BYTE A)
+static INLINE BYTE* writePixelXRGB(BYTE* dst, DWORD formatSize, UINT32 format, BYTE R, BYTE G,
+                                   BYTE B, BYTE A)
 {
 	WINPR_UNUSED(formatSize);
 	WINPR_UNUSED(format);
@@ -93,8 +95,8 @@ static INLINE BYTE* writePixelXRGB(BYTE* dst, DWORD formatSize, UINT32 format,
 	return dst;
 }
 
-static INLINE BYTE* writePixelGeneric(BYTE* dst, DWORD formatSize, UINT32 format,
-                                      BYTE R, BYTE G, BYTE B, BYTE A)
+static INLINE BYTE* writePixelGeneric(BYTE* dst, DWORD formatSize, UINT32 format, BYTE R, BYTE G,
+                                      BYTE B, BYTE A)
 {
 	UINT32 color = FreeRDPGetColor(format, R, G, B, A);
 	WriteColor(dst, format, color);
@@ -146,36 +148,36 @@ static INLINE BYTE CLIP(INT32 X)
  */
 static INLINE INT32 C(INT32 Y)
 {
-	return (Y) -   0L;
+	return (Y)-0L;
 }
 
 static INLINE INT32 D(INT32 U)
 {
-	return (U) - 128L;
+	return (U)-128L;
 }
 
 static INLINE INT32 E(INT32 V)
 {
-	return (V) - 128L;
+	return (V)-128L;
 }
 
 static INLINE BYTE YUV2R(INT32 Y, INT32 U, INT32 V)
 {
-	const INT32 r = (256L * C(Y) +   0L * D(U) + 403L * E(V));
+	const INT32 r = (256L * C(Y) + 0L * D(U) + 403L * E(V));
 	const INT32 r8 = r >> 8L;
 	return CLIP(r8);
 }
 
 static INLINE BYTE YUV2G(INT32 Y, INT32 U, INT32 V)
 {
-	const INT32 g = (256L * C(Y) -  48L * D(U) - 120L * E(V));
+	const INT32 g = (256L * C(Y) - 48L * D(U) - 120L * E(V));
 	const INT32 g8 = g >> 8L;
 	return CLIP(g8);
 }
 
 static INLINE BYTE YUV2B(INT32 Y, INT32 U, INT32 V)
 {
-	const INT32 b = (256L * C(Y) + 475L * D(U) +   0L * E(V));
+	const INT32 b = (256L * C(Y) + 475L * D(U) + 0L * E(V));
 	const INT32 b8 = b >> 8L;
 	return CLIP(b8);
 }
@@ -204,5 +206,11 @@ FREERDP_LOCAL void primitives_init_colors_opt(primitives_t* prims);
 FREERDP_LOCAL void primitives_init_YCoCg_opt(primitives_t* prims);
 FREERDP_LOCAL void primitives_init_YUV_opt(primitives_t* prims);
 #endif
+
+#if defined(WITH_OPENCL)
+FREERDP_LOCAL BOOL primitives_init_opencl(primitives_t* prims);
+#endif
+
+FREERDP_LOCAL primitives_t* primitives_get_by_type(DWORD type);
 
 #endif /* FREERDP_LIB_PRIM_INTERNAL_H */
