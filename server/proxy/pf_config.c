@@ -22,6 +22,7 @@
 #include <string.h>
 #include <winpr/crt.h>
 #include <winpr/collections.h>
+#include <winpr/cmdline.h>
 
 #include "pf_log.h"
 #include "pf_server.h"
@@ -75,8 +76,8 @@ BOOL pf_config_get_bool(wIniFile* ini, const char* section, const char* key)
 	str_value = IniFile_GetKeyValueString(ini, section, key);
 	if (!str_value)
 	{
-		WLog_WARN(TAG, "[%s]: key '%s.%s' not found, value defaults to false.", __FUNCTION__, key,
-		          section);
+		WLog_WARN(TAG, "[%s]: key '%s.%s' not found, value defaults to false.", __FUNCTION__,
+		          section, key);
 		return FALSE;
 	}
 
@@ -99,7 +100,7 @@ const char* pf_config_get_str(wIniFile* ini, const char* section, const char* ke
 
 	if (!value)
 	{
-		WLog_ERR(TAG, "[%s]: key '%s.%s' not found.", __FUNCTION__, key, section);
+		WLog_ERR(TAG, "[%s]: key '%s.%s' not found.", __FUNCTION__, section, key);
 		return NULL;
 	}
 
@@ -171,6 +172,8 @@ static BOOL pf_config_load_security(wIniFile* ini, proxyConfig* config)
 	config->ClientTlsSecurity = pf_config_get_bool(ini, "Security", "ClientTlsSecurity");
 	config->ClientNlaSecurity = pf_config_get_bool(ini, "Security", "ClientNlaSecurity");
 	config->ClientRdpSecurity = pf_config_get_bool(ini, "Security", "ClientRdpSecurity");
+	config->ClientAllowFallbackToTls =
+	    pf_config_get_bool(ini, "Security", "ClientAllowFallbackToTls");
 	return TRUE;
 }
 
@@ -186,31 +189,16 @@ static BOOL pf_config_load_clipboard(wIniFile* ini, proxyConfig* config)
 
 static BOOL pf_config_load_modules(wIniFile* ini, proxyConfig* config)
 {
-	int index;
-	int modules_count = 0;
-	char** module_names = NULL;
+	const char* modules_to_load;
+	const char* required_modules;
 
-	module_names = IniFile_GetSectionKeyNames(ini, "Modules", &modules_count);
+	modules_to_load = IniFile_GetKeyValueString(ini, "Plugins", "Modules");
+	required_modules = IniFile_GetKeyValueString(ini, "Plugins", "Required");
 
-	for (index = 0; index < modules_count; index++)
-	{
-		char* module_name = module_names[index];
-		const char* path = pf_config_get_str(ini, "Modules", module_name);
+	config->Modules = CommandLineParseCommaSeparatedValues(modules_to_load, &config->ModulesCount);
 
-		if (!path)
-			continue;
-
-		if (!pf_modules_register_new(path, module_name))
-		{
-			WLog_ERR(TAG, "pf_config_load_modules(): failed to register %s (%s)", module_name,
-			         path);
-			continue;
-		}
-
-		WLog_INFO(TAG, "module '%s' is loaded!", module_name);
-	}
-
-	free(module_names);
+	config->RequiredPlugins =
+	    CommandLineParseCommaSeparatedValues(required_modules, &config->RequiredPluginsCount);
 	return TRUE;
 }
 
@@ -244,22 +232,24 @@ static BOOL pf_config_load_captures(wIniFile* ini, proxyConfig* config)
 	return TRUE;
 }
 
-BOOL pf_server_config_load(const char* path, proxyConfig* config)
+proxyConfig* pf_server_config_load(const char* path)
 {
-	BOOL ok = FALSE;
+	proxyConfig* config = NULL;
 	wIniFile* ini = IniFile_New();
 
 	if (!ini)
 	{
-		WLog_ERR(TAG, "pf_server_load_config(): IniFile_New() failed!");
+		WLog_ERR(TAG, "[%s]: IniFile_New() failed!", __FUNCTION__);
 		return FALSE;
 	}
 
 	if (IniFile_ReadFile(ini, path) < 0)
 	{
-		WLog_ERR(TAG, "pf_server_load_config(): IniFile_ReadFile() failed!");
+		WLog_ERR(TAG, "[%s] failed to parse ini file: '%s'", __FUNCTION__, path);
 		goto out;
 	}
+
+	config = calloc(1, sizeof(proxyConfig));
 
 	if (!pf_config_load_server(ini, config))
 		goto out;
@@ -285,10 +275,13 @@ BOOL pf_server_config_load(const char* path, proxyConfig* config)
 	if (!pf_config_load_captures(ini, config))
 		goto out;
 
-	ok = TRUE;
+	IniFile_Free(ini);
+	return config;
+
 out:
 	IniFile_Free(ini);
-	return ok;
+	pf_server_config_free(config);
+	return NULL;
 }
 
 void pf_server_config_print(proxyConfig* config)
@@ -319,6 +312,7 @@ void pf_server_config_print(proxyConfig* config)
 	CONFIG_PRINT_BOOL(config, ClientNlaSecurity);
 	CONFIG_PRINT_BOOL(config, ClientTlsSecurity);
 	CONFIG_PRINT_BOOL(config, ClientRdpSecurity);
+	CONFIG_PRINT_BOOL(config, ClientAllowFallbackToTls);
 
 	CONFIG_PRINT_SECTION("Channels");
 	CONFIG_PRINT_BOOL(config, GFX);
@@ -339,7 +333,12 @@ void pf_server_config_print(proxyConfig* config)
 
 void pf_server_config_free(proxyConfig* config)
 {
+	if (config == NULL)
+		return;
+
 	free(config->CapturesDirectory);
+	free(config->RequiredPlugins);
+	free(config->Modules);
 	free(config->TargetHost);
 	free(config->Host);
 	free(config);

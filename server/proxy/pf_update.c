@@ -71,6 +71,8 @@ static BOOL pf_client_end_paint(rdpContext* context)
 	rdpContext* ps = (rdpContext*)pdata->ps;
 	rdpGdi* gdi = context->gdi;
 
+	WLog_DBG(TAG, __FUNCTION__);
+
 	/* proxy end paint */
 	if (!ps->update->EndPaint(ps))
 		return FALSE;
@@ -152,6 +154,16 @@ static BOOL pf_client_send_pointer_color(rdpContext* context,
 	return ps->update->pointer->PointerColor(ps, pointer_color);
 }
 
+static BOOL pf_client_send_pointer_large(rdpContext* context,
+                                         const POINTER_LARGE_UPDATE* pointer_large)
+{
+	pClientContext* pc = (pClientContext*)context;
+	proxyData* pdata = pc->pdata;
+	rdpContext* ps = (rdpContext*)pdata->ps;
+	WLog_DBG(TAG, __FUNCTION__);
+	return ps->update->pointer->PointerLarge(ps, pointer_large);
+}
+
 static BOOL pf_client_send_pointer_new(rdpContext* context, const POINTER_NEW_UPDATE* pointer_new)
 {
 	pClientContext* pc = (pClientContext*)context;
@@ -210,8 +222,12 @@ static BOOL pf_client_window_create(rdpContext* context, const WINDOW_ORDER_INFO
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->WindowCreate(ps, orderInfo, windowState);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->WindowCreate(ps, orderInfo, windowState);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_window_update(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
@@ -219,8 +235,12 @@ static BOOL pf_client_window_update(rdpContext* context, const WINDOW_ORDER_INFO
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->WindowUpdate(ps, orderInfo, windowState);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->WindowUpdate(ps, orderInfo, windowState);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_window_icon(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
@@ -228,8 +248,12 @@ static BOOL pf_client_window_icon(rdpContext* context, const WINDOW_ORDER_INFO* 
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->WindowIcon(ps, orderInfo, windowIcon);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->WindowIcon(ps, orderInfo, windowIcon);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_window_cached_icon(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
@@ -237,16 +261,24 @@ static BOOL pf_client_window_cached_icon(rdpContext* context, const WINDOW_ORDER
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->WindowCachedIcon(ps, orderInfo, windowCachedIcon);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->WindowCachedIcon(ps, orderInfo, windowCachedIcon);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_window_delete(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo)
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->WindowDelete(ps, orderInfo);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->WindowDelete(ps, orderInfo);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_notify_icon_create(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
@@ -254,8 +286,12 @@ static BOOL pf_client_notify_icon_create(rdpContext* context, const WINDOW_ORDER
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->NotifyIconCreate(ps, orderInfo, notifyIconState);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->NotifyIconCreate(ps, orderInfo, notifyIconState);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_notify_icon_update(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
@@ -263,16 +299,24 @@ static BOOL pf_client_notify_icon_update(rdpContext* context, const WINDOW_ORDER
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->NotifyIconUpdate(ps, orderInfo, notifyIconState);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->NotifyIconUpdate(ps, orderInfo, notifyIconState);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_notify_icon_delete(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo)
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->NotifyIconDelete(ps, orderInfo);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->NotifyIconDelete(ps, orderInfo);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_monitored_desktop(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
@@ -280,16 +324,24 @@ static BOOL pf_client_monitored_desktop(rdpContext* context, const WINDOW_ORDER_
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->MonitoredDesktop(ps, orderInfo, monitoredDesktop);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->MonitoredDesktop(ps, orderInfo, monitoredDesktop);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 static BOOL pf_client_non_monitored_desktop(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo)
 {
 	pClientContext* pc = (pClientContext*)context;
 	rdpContext* ps = (rdpContext*)pc->pdata->ps;
+	BOOL rc;
 	WLog_DBG(TAG, __FUNCTION__);
-	return ps->update->window->NonMonitoredDesktop(ps, orderInfo);
+	EnterCriticalSection(&ps->update->mux);
+	rc = ps->update->window->NonMonitoredDesktop(ps, orderInfo);
+	LeaveCriticalSection(&ps->update->mux);
+	return rc;
 }
 
 void pf_server_register_update_callbacks(rdpUpdate* update)
@@ -324,6 +376,7 @@ void pf_client_register_update_callbacks(rdpUpdate* update)
 	update->pointer->PointerSystem = pf_client_send_pointer_system;
 	update->pointer->PointerPosition = pf_client_send_pointer_position;
 	update->pointer->PointerColor = pf_client_send_pointer_color;
+	update->pointer->PointerLarge = pf_client_send_pointer_large;
 	update->pointer->PointerNew = pf_client_send_pointer_new;
 	update->pointer->PointerCached = pf_client_send_pointer_cached;
 }

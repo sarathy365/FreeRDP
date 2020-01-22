@@ -50,6 +50,7 @@ struct proxy_config
 	BOOL ClientNlaSecurity;
 	BOOL ClientTlsSecurity;
 	BOOL ClientRdpSecurity;
+	BOOL ClientAllowFallbackToTls;
 
 	/* channels */
 	BOOL GFX;
@@ -65,6 +66,13 @@ struct proxy_config
 	/* session capture */
 	BOOL SessionCapture;
 	char* CapturesDirectory;
+
+	/* modules */
+	char** Modules; /* module file names to load */
+	size_t ModulesCount;
+
+	char** RequiredPlugins; /* required plugin names */
+	size_t RequiredPluginsCount;
 };
 
 typedef struct proxy_config proxyConfig;
@@ -76,7 +84,7 @@ FREERDP_API BOOL pf_config_get_uint32(wIniFile* ini, const char* section, const 
 FREERDP_API BOOL pf_config_get_bool(wIniFile* ini, const char* section, const char* key);
 FREERDP_API const char* pf_config_get_str(wIniFile* ini, const char* section, const char* key);
 
-BOOL pf_server_config_load(const char* path, proxyConfig* config);
+proxyConfig* pf_server_config_load(const char* path);
 void pf_server_config_print(proxyConfig* config);
 void pf_server_config_free(proxyConfig* config);
 

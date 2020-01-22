@@ -331,7 +331,7 @@ rdpSettings* freerdp_settings_new(DWORD flags)
 	settings->Fullscreen = FALSE;
 	settings->GrabKeyboard = TRUE;
 	settings->Decorations = TRUE;
-	settings->RdpVersion = RDP_VERSION_10_6;
+	settings->RdpVersion = RDP_VERSION_10_7;
 	settings->ColorDepth = 16;
 	settings->ExtSecurity = FALSE;
 	settings->NlaSecurity = TRUE;
@@ -346,6 +346,7 @@ rdpSettings* freerdp_settings_new(DWORD flags)
 	settings->KeyboardSubType = 0;
 	settings->KeyboardFunctionKey = 12;
 	settings->KeyboardLayout = 0;
+	settings->KeyboardHook = 2;
 	settings->UseRdpSecurityLayer = FALSE;
 	settings->SaltedChecksum = TRUE;
 	settings->ServerPort = 3389;
@@ -421,13 +422,13 @@ rdpSettings* freerdp_settings_new(DWORD flags)
 	gethostname(settings->ClientHostname, 31);
 	settings->ClientHostname[31] = 0;
 	settings->ColorPointerFlag = TRUE;
-	settings->LargePointerFlag = TRUE;
+	settings->LargePointerFlag = (LARGE_POINTER_FLAG_96x96 | LARGE_POINTER_FLAG_384x384);
 	settings->PointerCacheSize = 20;
 	settings->SoundBeepsEnabled = TRUE;
 	settings->DrawGdiPlusEnabled = FALSE;
 	settings->DrawAllowSkipAlpha = TRUE;
-	settings->DrawAllowColorSubsampling = FALSE;
-	settings->DrawAllowDynamicColorFidelity = FALSE;
+	settings->DrawAllowColorSubsampling = TRUE;
+	settings->DrawAllowDynamicColorFidelity = TRUE;
 	settings->FrameMarkerCommandEnabled = TRUE;
 	settings->SurfaceFrameMarkerEnabled = TRUE;
 	settings->AllowCacheWaitingList = TRUE;
@@ -605,10 +606,6 @@ rdpSettings* freerdp_settings_new(DWORD flags)
 	}
 
 	settings_load_hkey_local_machine(settings);
-	settings->SettingsModified = (BYTE*)calloc(1, sizeof(rdpSettings) / 8);
-
-	if (!settings->SettingsModified)
-		goto out_fail;
 
 	settings->ActionScript = _strdup("~/.config/freerdp/action.sh");
 	settings->SmartcardLogon = FALSE;
@@ -623,27 +620,7 @@ rdpSettings* freerdp_settings_new(DWORD flags)
 
 	return settings;
 out_fail:
-	free(settings->HomePath);
-	free(settings->ConfigPath);
-	free(settings->DynamicChannelArray);
-	free(settings->StaticChannelArray);
-	free(settings->DeviceArray);
-	free(settings->ClientTimeZone);
-	free(settings->ServerAutoReconnectCookie);
-	free(settings->ClientAutoReconnectCookie);
-	free(settings->ClientDir);
-	free(settings->FragCache);
-	free(settings->GlyphCache);
-	free(settings->BitmapCacheV2CellInfo);
-	free(settings->ClientProductId);
-	free(settings->ClientHostname);
-	free(settings->OrderSupport);
-	free(settings->ReceivedCapabilities);
-	free(settings->ComputerName);
-	free(settings->MonitorIds);
-	free(settings->MonitorDefArray);
-	free(settings->ChannelDefArray);
-	free(settings);
+	freerdp_settings_free(settings);
 	return NULL;
 }
 
@@ -733,7 +710,6 @@ static void freerdp_settings_free_internal(rdpSettings* settings)
 	freerdp_device_collection_free(settings);
 	freerdp_static_channel_collection_free(settings);
 	freerdp_dynamic_channel_collection_free(settings);
-	free(settings->SettingsModified);
 	memset(settings, 0, sizeof(rdpSettings));
 }
 
@@ -1130,11 +1106,6 @@ BOOL freerdp_settings_copy(rdpSettings* _settings, const rdpSettings* settings)
 		if (!_settings->DynamicChannelArray[index])
 			goto out_fail;
 	}
-
-	_settings->SettingsModified = (BYTE*)calloc(1, sizeof(rdpSettings) / 8);
-
-	if (!_settings->SettingsModified)
-		goto out_fail;
 
 	return TRUE;
 out_fail:

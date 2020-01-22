@@ -19,6 +19,9 @@
  * limitations under the License.
  */
 
+#include <winpr/crypto.h>
+#include <winpr/print.h>
+
 #include "pf_client.h"
 #include "pf_context.h"
 
@@ -26,11 +29,6 @@
 static BOOL client_to_proxy_context_new(freerdp_peer* client, pServerContext* context)
 {
 	context->dynvcReady = NULL;
-	context->modules_info = NULL;
-
-	context->modules_info = HashTable_New(TRUE);
-	if (!context->modules_info)
-		return FALSE;
 
 	context->vcm = WTSOpenServerA((LPSTR)client->context);
 
@@ -43,7 +41,6 @@ static BOOL client_to_proxy_context_new(freerdp_peer* client, pServerContext* co
 	return TRUE;
 
 error:
-	HashTable_Free(context->modules_info);
 	WTSCloseServer((HANDLE)context->vcm);
 	context->vcm = NULL;
 
@@ -59,10 +56,12 @@ error:
 /* Proxy context free callback */
 static void client_to_proxy_context_free(freerdp_peer* client, pServerContext* context)
 {
-	WINPR_UNUSED(client);
+	proxyServer* server;
 
-	if (!context)
+	if (!client || !context)
 		return;
+
+	server = (proxyServer*)client->ContextExtra;
 
 	WTSCloseServer((HANDLE)context->vcm);
 
@@ -71,8 +70,6 @@ static void client_to_proxy_context_free(freerdp_peer* client, pServerContext* c
 		CloseHandle(context->dynvcReady);
 		context->dynvcReady = NULL;
 	}
-
-	HashTable_Free(context->modules_info);
 }
 
 BOOL pf_context_init_server_context(freerdp_peer* client)
@@ -128,7 +125,15 @@ BOOL pf_context_copy_settings(rdpSettings* dst, const rdpSettings* src)
 	{
 		/* adjust instance pointer for client's context */
 		dst->instance = before_copy->instance;
-		/* RdpServerRsaKey must be set to NULL if `dst` is client's context */
+
+		/*
+		 * RdpServerRsaKey must be set to NULL if `dst` is client's context
+		 * it must be freed before setting it to NULL to avoid a memory leak!
+		 */
+
+		free(dst->RdpServerRsaKey->Modulus);
+		free(dst->RdpServerRsaKey->PrivateExponent);
+		free(dst->RdpServerRsaKey);
 		dst->RdpServerRsaKey = NULL;
 	}
 
@@ -160,6 +165,7 @@ error:
 
 proxyData* proxy_data_new(void)
 {
+	BYTE temp[16];
 	proxyData* pdata = calloc(1, sizeof(proxyData));
 
 	if (pdata == NULL)
@@ -179,7 +185,39 @@ proxyData* proxy_data_new(void)
 		return NULL;
 	}
 
+	winpr_RAND((BYTE*)&temp, 16);
+	if (!(pdata->session_id = winpr_BinToHexString(temp, 16, FALSE)))
+	{
+		proxy_data_free(pdata);
+		return NULL;
+	}
+
+	if (!(pdata->modules_info = HashTable_New(FALSE)))
+	{
+		proxy_data_free(pdata);
+		return NULL;
+	}
+
+	/* modules_info maps between plugin name to custom data */
+	pdata->modules_info->hash = HashTable_StringHash;
+	pdata->modules_info->keyCompare = HashTable_StringCompare;
+	pdata->modules_info->keyClone = HashTable_StringClone;
+	pdata->modules_info->keyFree = HashTable_StringFree;
 	return pdata;
+}
+
+/* updates circular pointers between proxyData and pClientContext instances */
+void proxy_data_set_client_context(proxyData* pdata, pClientContext* context)
+{
+	pdata->pc = context;
+	context->pdata = pdata;
+}
+
+/* updates circular pointers between proxyData and pServerContext instances */
+void proxy_data_set_server_context(proxyData* pdata, pServerContext* context)
+{
+	pdata->ps = context;
+	context->pdata = pdata;
 }
 
 void proxy_data_free(proxyData* pdata)
@@ -201,6 +239,12 @@ void proxy_data_free(proxyData* pdata)
 		CloseHandle(pdata->gfx_server_ready);
 		pdata->gfx_server_ready = NULL;
 	}
+
+	if (pdata->session_id)
+		free(pdata->session_id);
+
+	if (pdata->modules_info)
+		HashTable_Free(pdata->modules_info);
 
 	free(pdata);
 }

@@ -23,24 +23,9 @@
 #include "config.h"
 #endif
 
-#include <errno.h>
-#include <stdio.h>
-#include <string.h>
-
 #include <freerdp/freerdp.h>
-#include <freerdp/constants.h>
 #include <freerdp/gdi/gdi.h>
-#include <freerdp/utils/signal.h>
-
-#include <freerdp/client/file.h>
 #include <freerdp/client/cmdline.h>
-#include <freerdp/client/cliprdr.h>
-#include <freerdp/client/channels.h>
-#include <freerdp/channels/channels.h>
-#include <freerdp/log.h>
-
-#include <winpr/crt.h>
-#include <winpr/synch.h>
 
 #include "pf_channels.h"
 #include "pf_gdi.h"
@@ -69,7 +54,7 @@ static BOOL proxy_server_reactivate(rdpContext* ps, const rdpContext* pc)
 	return TRUE;
 }
 
-static void pf_OnErrorInfo(void* ctx, ErrorInfoEventArgs* e)
+static void pf_client_on_error_info(void* ctx, ErrorInfoEventArgs* e)
 {
 	pClientContext* pc = (pClientContext*)ctx;
 	pServerContext* ps = pc->pdata->ps;
@@ -77,8 +62,8 @@ static void pf_OnErrorInfo(void* ctx, ErrorInfoEventArgs* e)
 	if (e->code == ERRINFO_NONE)
 		return;
 
-	WLog_WARN(TAG, "received error info code: 0x%08" PRIu32 ", msg: %s", e->code,
-	          freerdp_get_error_info_string(e->code));
+	LOG_WARN(TAG, pc, "received ErrorInfo PDU. code=0x%08" PRIu32 ", message: %s", e->code,
+	         freerdp_get_error_info_string(e->code));
 
 	/* forward error back to client */
 	freerdp_set_error_info(ps->context.rdp, e->code);
@@ -134,9 +119,6 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 	settings->GlyphSupportLevel = GLYPH_SUPPORT_NONE;
 	ZeroMemory(instance->settings->OrderSupport, 32);
 
-	settings->OsMajorType = OSMAJORTYPE_UNIX;
-	settings->OsMinorType = OSMINORTYPE_NATIVE_XSERVER;
-
 	settings->SupportDynamicChannels = TRUE;
 
 	/* Multimon */
@@ -155,10 +137,11 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 	 * Register the channel listeners.
 	 * They are required to set up / tear down channels if they are loaded.
 	 */
-	PubSub_SubscribeChannelConnected(instance->context->pubSub, pf_OnChannelConnectedEventHandler);
+	PubSub_SubscribeChannelConnected(instance->context->pubSub,
+	                                 pf_channels_on_client_channel_connect);
 	PubSub_SubscribeChannelDisconnected(instance->context->pubSub,
-	                                    pf_OnChannelDisconnectedEventHandler);
-	PubSub_SubscribeErrorInfo(instance->context->pubSub, pf_OnErrorInfo);
+	                                    pf_channels_on_client_channel_disconnect);
+	PubSub_SubscribeErrorInfo(instance->context->pubSub, pf_client_on_error_info);
 
 	/**
 	 * Load all required plugins / channels / libraries specified by current
@@ -168,7 +151,7 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 
 	if (!pf_client_load_rdpsnd(pc, config))
 	{
-		WLog_ERR(TAG, "Failed to load rdpsnd client!");
+		LOG_ERR(TAG, pc, "Failed to load rdpsnd client");
 		return FALSE;
 	}
 
@@ -210,11 +193,11 @@ static BOOL pf_client_post_connect(freerdp* instance)
 	{
 		if (!pf_capture_create_session_directory(pc))
 		{
-			WLog_ERR(TAG, "pf_capture_create_session_directory failed!");
+			LOG_ERR(TAG, pc, "pf_capture_create_session_directory failed!");
 			return FALSE;
 		}
 
-		WLog_INFO(TAG, "frames dir created: %s", pc->frames_dir);
+		LOG_ERR(TAG, pc, "frames dir created: %s", pc->frames_dir);
 	}
 
 	if (!gdi_init(instance, PIXEL_FORMAT_BGRA32))
@@ -227,7 +210,7 @@ static BOOL pf_client_post_connect(freerdp* instance)
 	{
 		if (!pf_register_graphics(context->graphics))
 		{
-			WLog_ERR(TAG, "failed to register graphics");
+			LOG_ERR(TAG, pc, "failed to register graphics");
 			return FALSE;
 		}
 
@@ -267,10 +250,10 @@ static void pf_client_post_disconnect(freerdp* instance)
 	pdata = context->pdata;
 
 	PubSub_UnsubscribeChannelConnected(instance->context->pubSub,
-	                                   pf_OnChannelConnectedEventHandler);
+	                                   pf_channels_on_client_channel_connect);
 	PubSub_UnsubscribeChannelDisconnected(instance->context->pubSub,
-	                                      pf_OnChannelDisconnectedEventHandler);
-	PubSub_UnsubscribeErrorInfo(instance->context->pubSub, pf_OnErrorInfo);
+	                                      pf_channels_on_client_channel_disconnect);
+	PubSub_UnsubscribeErrorInfo(instance->context->pubSub, pf_client_on_error_info);
 	gdi_free(instance);
 
 	/* Only close the connection if NLA fallback process is done */
@@ -289,7 +272,7 @@ static BOOL pf_client_should_retry_without_nla(pClientContext* pc)
 	rdpSettings* settings = pc->context.settings;
 	proxyConfig* config = pc->pdata->config;
 
-	if (!settings->NlaSecurity)
+	if (!config->ClientAllowFallbackToTls || !settings->NlaSecurity)
 		return FALSE;
 
 	return config->ClientTlsSecurity || config->ClientRdpSecurity;
@@ -330,18 +313,23 @@ static BOOL pf_client_connect(freerdp* instance)
 {
 	pClientContext* pc = (pClientContext*)instance->context;
 	BOOL rc = FALSE;
+	BOOL retry = FALSE;
 
 	pf_client_set_security_settings(pc);
 	if (pf_client_should_retry_without_nla(pc))
-		pc->allow_next_conn_failure = TRUE;
+		retry = pc->allow_next_conn_failure = TRUE;
 
 	if (!freerdp_connect(instance))
 	{
-		WLog_ERR(TAG, "failed to connect with NLA. disabling NLA and retyring...");
+		if (!retry)
+			goto out;
+
+		LOG_ERR(TAG, pc, "failed to connect with NLA. retrying to connect without NLA");
+		pf_modules_run_hook(HOOK_TYPE_CLIENT_LOGIN_FAILURE, pc->pdata);
 
 		if (!pf_client_connect_without_nla(pc))
 		{
-			WLog_ERR(TAG, "pf_client_connect_without_nla failed!");
+			LOG_ERR(TAG, pc, "pf_client_connect_without_nla failed!");
 			goto out;
 		}
 	}
@@ -361,7 +349,6 @@ static DWORD WINAPI pf_client_thread_proc(LPVOID arg)
 {
 	freerdp* instance = (freerdp*)arg;
 	pClientContext* pc = (pClientContext*)instance->context;
-	pServerContext* ps = pc->pdata->ps;
 	proxyData* pdata = pc->pdata;
 	DWORD nCount;
 	DWORD status;
@@ -376,7 +363,7 @@ static DWORD WINAPI pf_client_thread_proc(LPVOID arg)
 	 */
 	handles[64] = pdata->abort_event;
 
-	if (!pf_modules_run_hook(HOOK_TYPE_CLIENT_PRE_CONNECT, (rdpContext*)ps))
+	if (!pf_modules_run_hook(HOOK_TYPE_CLIENT_PRE_CONNECT, pdata))
 	{
 		proxy_data_abort_connect(pdata);
 		return FALSE;
@@ -394,7 +381,7 @@ static DWORD WINAPI pf_client_thread_proc(LPVOID arg)
 
 		if (nCount == 0)
 		{
-			WLog_ERR(TAG, "%s: freerdp_get_event_handles failed", __FUNCTION__);
+			LOG_ERR(TAG, pc, "freerdp_get_event_handles failed!");
 			break;
 		}
 
@@ -424,19 +411,6 @@ static DWORD WINAPI pf_client_thread_proc(LPVOID arg)
 
 	freerdp_disconnect(instance);
 	return 0;
-}
-
-/**
- * Optional global initializer.
- * Here we just register a signal handler to print out stack traces
- * if available.
- * */
-static BOOL pf_client_global_init(void)
-{
-	if (freerdp_handle_signals() != 0)
-		return FALSE;
-
-	return TRUE;
 }
 
 static int pf_logon_error_info(freerdp* instance, UINT32 data, UINT32 type)
@@ -535,7 +509,7 @@ static int pf_client_client_stop(rdpContext* context)
 	pClientContext* pc = (pClientContext*)context;
 	proxyData* pdata = pc->pdata;
 
-	WLog_DBG(TAG, "aborting client connection");
+	LOG_DBG(TAG, pc, "aborting client connection");
 	proxy_data_abort_connect(pdata);
 	freerdp_abort_connect(context->instance);
 
@@ -545,9 +519,9 @@ static int pf_client_client_stop(rdpContext* context)
 		 * Wait for client thread to finish. No need to call CloseHandle() here, as
 		 * it is the responsibility of `proxy_data_free`.
 		 */
-		WLog_DBG(TAG, "pf_client_client_stop(): waiting for thread to finish");
+		LOG_DBG(TAG, pc, "waiting for client thread to finish");
 		WaitForSingleObject(pdata->client_thread, INFINITE);
-		WLog_DBG(TAG, "pf_client_client_stop(): thread finished");
+		LOG_DBG(TAG, pc, "thread finished");
 	}
 
 	return 0;
@@ -558,7 +532,6 @@ int RdpClientEntry(RDP_CLIENT_ENTRY_POINTS* pEntryPoints)
 	ZeroMemory(pEntryPoints, sizeof(RDP_CLIENT_ENTRY_POINTS));
 	pEntryPoints->Version = RDP_CLIENT_INTERFACE_VERSION;
 	pEntryPoints->Size = sizeof(RDP_CLIENT_ENTRY_POINTS_V1);
-	pEntryPoints->GlobalInit = pf_client_global_init;
 	pEntryPoints->ContextSize = sizeof(pClientContext);
 	/* Client init and finish */
 	pEntryPoints->ClientNew = pf_client_client_new;

@@ -166,7 +166,8 @@ static void transport_ssl_cb(SSL* ssl, int where, int ret)
 				if (!freerdp_get_last_error(transport->context))
 				{
 					WLog_Print(transport->log, WLOG_ERROR, "%s: ACCESS DENIED", __FUNCTION__);
-					freerdp_set_last_error(transport->context, FREERDP_ERROR_AUTHENTICATION_FAILED);
+					freerdp_set_last_error_log(transport->context,
+					                           FREERDP_ERROR_AUTHENTICATION_FAILED);
 				}
 			}
 			break;
@@ -189,8 +190,7 @@ static void transport_ssl_cb(SSL* ssl, int where, int ret)
 #endif /* WITH_GSSAPI */
 						kret = FREERDP_ERROR_CONNECT_PASSWORD_CERTAINLY_EXPIRED;
 
-					if (!freerdp_get_last_error(transport->context))
-						freerdp_set_last_error(transport->context, kret);
+					freerdp_set_last_error_if_not(transport->context, kret);
 				}
 
 				break;
@@ -289,13 +289,11 @@ BOOL transport_connect_tls(rdpTransport* transport)
 	{
 		if (tlsStatus < 0)
 		{
-			if (!freerdp_get_last_error(context))
-				freerdp_set_last_error(context, FREERDP_ERROR_TLS_CONNECT_FAILED);
+			freerdp_set_last_error_if_not(context, FREERDP_ERROR_TLS_CONNECT_FAILED);
 		}
 		else
 		{
-			if (!freerdp_get_last_error(context))
-				freerdp_set_last_error(context, FREERDP_ERROR_CONNECT_CANCELLED);
+			freerdp_set_last_error_if_not(context, FREERDP_ERROR_CONNECT_CANCELLED);
 		}
 
 		return FALSE;
@@ -345,8 +343,7 @@ BOOL transport_connect_nla(rdpTransport* transport)
 	{
 		WLog_Print(transport->log, WLOG_ERROR, "NLA begin failed");
 
-		if (!freerdp_get_last_error(context))
-			freerdp_set_last_error(context, FREERDP_ERROR_AUTHENTICATION_FAILED);
+		freerdp_set_last_error_if_not(context, FREERDP_ERROR_AUTHENTICATION_FAILED);
 
 		transport_set_nla_mode(transport, FALSE);
 		return FALSE;
@@ -397,7 +394,7 @@ BOOL transport_connect(rdpTransport* transport, const char* hostname, UINT16 por
 				return FALSE;
 
 			/* Reset error condition from RDG */
-			freerdp_set_last_error(context, FREERDP_ERROR_SUCCESS);
+			freerdp_set_last_error_log(context, FREERDP_ERROR_SUCCESS);
 			status = tsg_connect(transport->tsg, hostname, port, timeout);
 
 			if (status)
@@ -558,6 +555,7 @@ static SSIZE_T transport_read_layer(rdpTransport* transport, BYTE* data, size_t 
 	if (!transport->frontBio || (bytes > SSIZE_MAX))
 	{
 		transport->layer = TRANSPORT_LAYER_CLOSED;
+		freerdp_set_last_error_if_not(transport->context, FREERDP_ERROR_CONNECT_TRANSPORT_FAILED);
 		return -1;
 	}
 
@@ -580,6 +578,8 @@ static SSIZE_T transport_read_layer(rdpTransport* transport, BYTE* data, size_t 
 
 				WLog_ERR_BIO(transport, "BIO_read", transport->frontBio);
 				transport->layer = TRANSPORT_LAYER_CLOSED;
+				freerdp_set_last_error_if_not(transport->context,
+				                              FREERDP_ERROR_CONNECT_TRANSPORT_FAILED);
 				return -1;
 			}
 
@@ -807,6 +807,7 @@ int transport_write(rdpTransport* transport, wStream* s)
 	if (!transport->frontBio)
 	{
 		transport->layer = TRANSPORT_LAYER_CLOSED;
+		freerdp_set_last_error_if_not(transport->context, FREERDP_ERROR_CONNECT_TRANSPORT_FAILED);
 		goto fail;
 	}
 
@@ -885,6 +886,7 @@ out_cleanup:
 	{
 		/* A write error indicates that the peer has dropped the connection */
 		transport->layer = TRANSPORT_LAYER_CLOSED;
+		freerdp_set_last_error_if_not(transport->context, FREERDP_ERROR_CONNECT_TRANSPORT_FAILED);
 	}
 
 	LeaveCriticalSection(&(transport->WriteLock));
@@ -1008,6 +1010,7 @@ int transport_check_fds(rdpTransport* transport)
 	if (transport->layer == TRANSPORT_LAYER_CLOSED)
 	{
 		WLog_Print(transport->log, WLOG_DEBUG, "transport_check_fds: transport layer closed");
+		freerdp_set_last_error_if_not(transport->context, FREERDP_ERROR_CONNECT_TRANSPORT_FAILED);
 		return -1;
 	}
 

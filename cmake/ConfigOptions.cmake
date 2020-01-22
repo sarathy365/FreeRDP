@@ -145,6 +145,7 @@ option(WITH_GSSAPI "Compile support for kerberos authentication. (EXPERIMENTAL)"
 option(WITH_DSP_EXPERIMENTAL "Enable experimental sound encoder/decoder formats" OFF)
 if (WITH_FFMPEG)
     option(WITH_DSP_FFMPEG "Use FFMPEG for audio encoding/decoding" OFF)
+    option(WITH_VAAPI "Use FFMPEG VAAPI" OFF)
 endif(WITH_FFMPEG)
 
 option(USE_VERSION_FROM_GIT_TAG "Extract FreeRDP version from git tag." OFF)
@@ -160,3 +161,7 @@ if (IOS)
 	include(ConfigOptionsiOS)
 endif(IOS)
 
+if (WITH_SERVER)
+	# Proxy Options
+	option(WITH_PROXY_MODULES "Compile proxy modules" OFF)
+endif()
