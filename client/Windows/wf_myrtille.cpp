@@ -177,6 +177,11 @@ struct wf_myrtille
 	std::atomic<int> imageCount;			// protect from concurrent accesses
 	std::atomic<int> imageIdx;				// protect from concurrent accesses
 
+	// updates buffer
+	// in case of bandwidth issue, the browser/gateway roundtrip duration will increase dramatically (increasing accumulated delay -> lag)
+	// some updates must be consolidated into a single one to reduce both the cpu and bandwidth usage
+	RECT imageBuffer;						// consolidated region
+
 	// display
 	bool scaleDisplay;						// overrides the FreeRDP "SmartSizing" setting; the objective is not to interfere with the FreeRDP window, if shown
 	int clientWidth;						// overrides wf_context::client_width
@@ -283,6 +288,12 @@ void wf_myrtille_start(wfContext* wfc)
 	myrtille->imageQuantity = IMAGE_COUNT_SAMPLING_RATE;
 	myrtille->imageCount = 0;
 	myrtille->imageIdx = 0;
+
+	// updates buffer
+	myrtille->imageBuffer.top = -1;
+	myrtille->imageBuffer.left = -1;
+	myrtille->imageBuffer.bottom = -1;
+	myrtille->imageBuffer.right = -1;
 
 	// display
 	myrtille->scaleDisplay = false;
@@ -522,8 +533,36 @@ void wf_myrtille_send_region(wfContext* wfc, RECT region)
 		myrtille->imageQuantity == 25 ||
 		myrtille->imageQuantity == 50)
 	{
+		if (myrtille->imageBuffer.top == -1 || region.top < myrtille->imageBuffer.top)
+			myrtille->imageBuffer.top = region.top;
+
+		if (myrtille->imageBuffer.left == -1 || region.left < myrtille->imageBuffer.left)
+			myrtille->imageBuffer.left = region.left;
+
+		if (myrtille->imageBuffer.bottom == -1 || region.bottom > myrtille->imageBuffer.bottom)
+			myrtille->imageBuffer.bottom = region.bottom;
+
+		if (myrtille->imageBuffer.right == -1 || region.right > myrtille->imageBuffer.right)
+			myrtille->imageBuffer.right = region.right;
+
 		if (myrtille->imageCount % (100 / myrtille->imageQuantity) != 0)
 			return;
+
+		if (myrtille->imageBuffer.top != -1 &&
+			myrtille->imageBuffer.left != -1 &&
+			myrtille->imageBuffer.bottom != -1 &&
+			myrtille->imageBuffer.right != -1)
+		{
+			region.top = myrtille->imageBuffer.top;
+			region.left = myrtille->imageBuffer.left;
+			region.bottom = myrtille->imageBuffer.bottom;
+			region.right = myrtille->imageBuffer.right;
+		}
+
+		myrtille->imageBuffer.top = -1;
+		myrtille->imageBuffer.left = -1;
+		myrtille->imageBuffer.bottom = -1;
+		myrtille->imageBuffer.right = -1;
 	}
 
 	// --------------------------- extract the consolidated region --------------------------------
