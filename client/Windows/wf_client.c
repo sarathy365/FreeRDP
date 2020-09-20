@@ -853,7 +853,7 @@ static DWORD WINAPI wf_client_thread(LPVOID lpParam)
 
 	if (context->settings->MyrtilleSessionId != NULL)
 	{
-		wf_myrtille_send_screen(wfc);
+		wf_myrtille_send_screen(wfc, false);
 	}
 
 	#pragma endregion

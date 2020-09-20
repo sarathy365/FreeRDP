@@ -54,7 +54,7 @@ std::string createRemoteSessionDirectory(wfContext* wfc);
 void processResizeDisplay(wfContext* wfc, bool keepAspectRatio, std::string resolution);
 void processMouseInput(wfContext* wfc, std::string input, UINT16 flags);
 void sendMessage(wfContext* wfc, std::wstring msg);
-void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int right, int bottom, bool fullscreen);
+void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int right, int bottom, bool fullscreen, bool adaptive);
 void saveImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int idx, int format, int quality, bool fullscreen);
 void sendImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int idx, int posX, int posY, int width, int height, int format, int quality, IStream* stream, int size, bool fullscreen);
 void sendAudio(wfContext* wfc, const BYTE* data, size_t size);
@@ -148,7 +148,7 @@ enum class IMAGE_QUALITY
 	LOW = 10,
 	MEDIUM = 25,
 	HIGH = 50,								// not applicable for PNG (lossless); may be tweaked dynamically depending on image encoding and client bandwidth
-	HIGHER = 75,							// not applicable for PNG (lossless); used for fullscreen updates
+	HIGHER = 75,							// not applicable for PNG (lossless); used for fullscreen updates in adaptive mode
 	HIGHEST = 100							// default
 };
 
@@ -445,7 +445,7 @@ HANDLE wf_myrtille_connect(wfContext* wfc)
 	return thread;
 }
 
-void wf_myrtille_send_screen(wfContext* wfc)
+void wf_myrtille_send_screen(wfContext* wfc, bool adaptive)
 {
 	if (wfc->context.settings->MyrtilleSessionId == NULL)
 		return;
@@ -485,7 +485,7 @@ void wf_myrtille_send_screen(wfContext* wfc)
 
 	// ---------------------------  process it ----------------------------------------------------
 
-	processImage(wfc, bmpScreen, 0, 0, myrtille->scaleDisplay ? cw : dw, myrtille->scaleDisplay ? ch : dh, true);
+	processImage(wfc, bmpScreen, 0, 0, myrtille->scaleDisplay ? cw : dw, myrtille->scaleDisplay ? ch : dh, true, adaptive);
 
 	// ---------------------------  cleanup -------------------------------------------------------
 
@@ -626,7 +626,7 @@ void wf_myrtille_send_region(wfContext* wfc, RECT region)
 
 	// ---------------------------  process it ----------------------------------------------------
 
-	processImage(wfc, bmpRegion, region.left, region.top, region.right, region.bottom, false);
+	processImage(wfc, bmpRegion, region.left, region.top, region.right, region.bottom, false, false);
 
 	// ---------------------------  cleanup -------------------------------------------------------
 
@@ -1414,12 +1414,12 @@ DWORD WINAPI processInputsPipe(LPVOID lpParameter)
 					// take screenshot
 					case COMMAND::TAKE_SCREENSHOT:
 						myrtille->screenshotEnabled = true;
-						wf_myrtille_send_screen(wfc);
+						wf_myrtille_send_screen(wfc, true);
 						break;
 
 					// fullscreen update
 					case COMMAND::REQUEST_FULLSCREEN_UPDATE:
-						wf_myrtille_send_screen(wfc);
+						wf_myrtille_send_screen(wfc, commandArgs == "adaptive");
 						break;
 
 					// client clipboard
@@ -1616,7 +1616,7 @@ void sendMessage(wfContext* wfc, std::wstring msg)
 	header = NULL;
 }
 
-void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int right, int bottom, bool fullscreen)
+void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int right, int bottom, bool fullscreen, bool adaptive)
 {
 	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
 
@@ -1627,8 +1627,8 @@ void processImage(wfContext* wfc, Gdiplus::Bitmap* bmp, int left, int top, int r
 	STATSTG statstg;
 
 	int format;
-	// PNG: use highest quality (lossless); AUTO/JPEG/WEBP: use higher quality for fullscreen updates or current quality otherwise
-	int quality = (myrtille->imageEncoding == (int)IMAGE_ENCODING::PNG ? (int)IMAGE_QUALITY::HIGHEST : (fullscreen ? (int)IMAGE_QUALITY::HIGHER : myrtille->imageQuality));
+	// PNG: use highest quality (lossless); AUTO/JPEG/WEBP: use higher quality for fullscreen updates in adaptive mode or current quality otherwise
+	int quality = (myrtille->imageEncoding == (int)IMAGE_ENCODING::PNG ? (int)IMAGE_QUALITY::HIGHEST : (fullscreen && adaptive ? (int)IMAGE_QUALITY::HIGHER : myrtille->imageQuality));
 	IStream* stream = NULL;
 	ULONG size = 0;
 
