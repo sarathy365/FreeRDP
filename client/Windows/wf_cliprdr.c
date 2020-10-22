@@ -2295,6 +2295,19 @@ wf_cliprdr_server_format_data_response(CliprdrClientContext* context,
 	if (!context || !formatDataResponse)
 		return ERROR_INTERNAL_ERROR;
 
+	#pragma region Myrtille
+
+	/*
+	some applications, like the MS Office ones (Access, Word, PowerPoint, Excel, and Outlook), have a special handling of clipboard paste (see https://support.microsoft.com/en-us/office/paste-special-e03db6c7-8295-4529-957d-16ac8a778719)
+	this offers different ways of pasting a copied content, which in turn triggers a behavior different than the standard copy & paste
+	unfortunately, this may not be expected by the clipboard virtual channel, which fails after such a special paste when pressing the enter key
+	*/
+
+	if (context->rdpcontext->settings->MyrtilleSessionId != NULL && formatDataResponse->msgFlags != CB_RESPONSE_OK)
+		return CHANNEL_RC_OK;
+
+	#pragma endregion
+
 	if (formatDataResponse->msgFlags != CB_RESPONSE_OK)
 		return E_FAIL;
 
