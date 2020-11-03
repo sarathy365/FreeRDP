@@ -282,6 +282,7 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 	wfContext* wfc = NULL;
 	rdpInput* input = NULL;
 	rdpContext* context = NULL;
+	rdpSettings* settings = NULL;
 	wfRailWindow* railWindow;
 	railWindow = (wfRailWindow*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
 
@@ -292,7 +293,10 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 		context = (rdpContext*)wfc;
 
 	if (context)
+	{
 		input = context->input;
+		settings = context->settings;	
+	}
 
 	switch (msg)
 	{
@@ -390,7 +394,14 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 			break;
 
 		case WM_DESTROY:
-			PostQuitMessage(0);
+			if (settings != NULL && settings->RemoteApplicationMode == TRUE)
+			{
+				DestroyWindow(hWnd);
+			}
+			else
+			{
+				PostQuitMessage(0);
+			}
 			break;
 
 		default:
