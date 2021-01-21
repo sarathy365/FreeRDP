@@ -1,0 +1,3 @@
+1. Open "x64 Native Tools Command Prompt for VS 2019"
+2. Goto Source Folder
+3. Run cmake . -G"Visual Studio 16 2019" -DLIBUSB_1_INCLUDE_DIR=.\libusb\include -DLIBUSB_1_LIBRARY=.\libusb\static\libusb-1.0.lib
