@@ -779,10 +779,7 @@ struct addrinfo* freerdp_tcp_resolve_host(const char* hostname, int port, int ai
 	status = getaddrinfo(hostname, service, &hints, &result);
 
 	if (status)
-	{
-		freeaddrinfo(result);
 		return NULL;
-	}
 
 	return result;
 }
@@ -1063,7 +1060,7 @@ static BOOL freerdp_tcp_set_keep_alive_mode(const rdpSettings* settings, int soc
 }
 
 int freerdp_tcp_connect(rdpContext* context, rdpSettings* settings, const char* hostname, int port,
-                        int timeout)
+                        DWORD timeout)
 {
 	int sockfd;
 	UINT32 optval;

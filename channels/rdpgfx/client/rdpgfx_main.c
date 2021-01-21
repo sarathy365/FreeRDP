@@ -75,16 +75,16 @@ static void free_surfaces(RdpgfxClientContext* context, wHashTable* SurfaceTable
 	free(pKeys);
 }
 
-static void evict_cache_slots(RdpgfxClientContext* context, UINT16 MaxCacheSlot, void** CacheSlots)
+static void evict_cache_slots(RdpgfxClientContext* context, UINT16 MaxCacheSlots, void** CacheSlots)
 {
 	UINT16 index;
 
-	for (index = 0; index < MaxCacheSlot; index++)
+	for (index = 0; index < MaxCacheSlots; index++)
 	{
 		if (CacheSlots[index])
 		{
 			RDPGFX_EVICT_CACHE_ENTRY_PDU pdu;
-			pdu.cacheSlot = (UINT16)index;
+			pdu.cacheSlot = (UINT16)index + 1;
 
 			if (context && context->EvictCacheEntry)
 			{
@@ -112,7 +112,12 @@ static UINT rdpgfx_send_caps_advertise_pdu(RdpgfxClientContext* context,
 	RDPGFX_CHANNEL_CALLBACK* callback;
 	wStream* s;
 	gfx = (RDPGFX_PLUGIN*)context->handle;
+
+	if (!gfx || !gfx->listener_callback)
+		return ERROR_BAD_ARGUMENTS;
+
 	callback = gfx->listener_callback->channel_callback;
+
 	header.flags = 0;
 	header.cmdId = RDPGFX_CMDID_CAPSADVERTISE;
 	header.pduLength = RDPGFX_HEADER_SIZE + 2;
@@ -374,7 +379,7 @@ static UINT rdpgfx_send_frame_acknowledge_pdu(RdpgfxClientContext* context,
 
 	gfx = (RDPGFX_PLUGIN*)context->handle;
 
-	if (!gfx)
+	if (!gfx || !gfx->listener_callback)
 		return ERROR_BAD_CONFIGURATION;
 
 	callback = gfx->listener_callback->channel_callback;
@@ -429,7 +434,7 @@ static UINT rdpgfx_send_qoe_frame_acknowledge_pdu(RdpgfxClientContext* context,
 
 	gfx = (RDPGFX_PLUGIN*)context->handle;
 
-	if (!gfx)
+	if (!gfx || !gfx->listener_callback)
 		return ERROR_BAD_CONFIGURATION;
 
 	callback = gfx->listener_callback->channel_callback;
@@ -482,7 +487,7 @@ static UINT rdpgfx_send_cache_import_offer_pdu(RdpgfxClientContext* context,
 
 	gfx = (RDPGFX_PLUGIN*)context->handle;
 
-	if (!gfx)
+	if (!gfx || !gfx->listener_callback)
 		return ERROR_BAD_CONFIGURATION;
 
 	callback = gfx->listener_callback->channel_callback;
@@ -600,7 +605,7 @@ static UINT rdpgfx_recv_reset_graphics_pdu(RDPGFX_CHANNEL_CALLBACK* callback, wS
 		monitor = &(pdu.monitorDefArray[index]);
 		DEBUG_RDPGFX(gfx->log,
 		             "RecvResetGraphicsPdu: monitor left:%" PRIi32 " top:%" PRIi32 " right:%" PRIi32
-		             " left:%" PRIi32 " flags:0x%" PRIx32 "",
+		             " bottom:%" PRIi32 " flags:0x%" PRIx32 "",
 		             monitor->left, monitor->top, monitor->right, monitor->bottom, monitor->flags);
 	}
 
@@ -1714,7 +1719,7 @@ static UINT rdpgfx_recv_pdu(RDPGFX_CHANNEL_CALLBACK* callback, wStream* s)
 
 	if (error)
 	{
-		WLog_Print(gfx->log, WLOG_ERROR, "Error while parsing GFX cmdId: %s (0x%04" PRIX16 ")",
+		WLog_Print(gfx->log, WLOG_ERROR, "Error while processing GFX cmdId: %s (0x%04" PRIX16 ")",
 		           rdpgfx_get_cmd_id_string(header.cmdId), header.cmdId);
 		return error;
 	}
@@ -1819,13 +1824,7 @@ static UINT rdpgfx_on_close(IWTSVirtualChannelCallback* pChannelCallback)
 
 	DEBUG_RDPGFX(gfx->log, "OnClose");
 	free_surfaces(context, gfx->SurfaceTable);
-	evict_cache_slots(context, gfx->MaxCacheSlot, gfx->CacheSlots);
-
-	if (gfx->listener_callback)
-	{
-		free(gfx->listener_callback);
-		gfx->listener_callback = NULL;
-	}
+	evict_cache_slots(context, gfx->MaxCacheSlots, gfx->CacheSlots);
 
 	free(callback);
 	gfx->UnacknowledgedFrames = 0;
@@ -1891,8 +1890,7 @@ static UINT rdpgfx_plugin_initialize(IWTSPlugin* pPlugin, IWTSVirtualChannelMana
 	gfx->listener_callback->plugin = pPlugin;
 	gfx->listener_callback->channel_mgr = pChannelMgr;
 	error = pChannelMgr->CreateListener(pChannelMgr, RDPGFX_DVC_CHANNEL_NAME, 0,
-	                                    (IWTSListenerCallback*)gfx->listener_callback,
-	                                    &(gfx->listener));
+	                                    &gfx->listener_callback->iface, &(gfx->listener));
 	gfx->listener->pInterface = gfx->iface.pInterface;
 	DEBUG_RDPGFX(gfx->log, "Initialize");
 	return error;
@@ -1908,6 +1906,12 @@ static UINT rdpgfx_plugin_terminated(IWTSPlugin* pPlugin)
 	RDPGFX_PLUGIN* gfx = (RDPGFX_PLUGIN*)pPlugin;
 	RdpgfxClientContext* context = (RdpgfxClientContext*)gfx->iface.pInterface;
 	DEBUG_RDPGFX(gfx->log, "Terminated");
+	if (gfx && gfx->listener_callback)
+	{
+		IWTSVirtualChannelManager* mgr = gfx->listener_callback->channel_mgr;
+		if (mgr)
+			IFCALL(mgr->DestroyListener, mgr, gfx->listener);
+	}
 	rdpgfx_client_context_free(context);
 	return CHANNEL_RC_OK;
 }
@@ -1991,14 +1995,15 @@ static UINT rdpgfx_set_cache_slot_data(RdpgfxClientContext* context, UINT16 cach
 {
 	RDPGFX_PLUGIN* gfx = (RDPGFX_PLUGIN*)context->handle;
 
-	if (cacheSlot >= gfx->MaxCacheSlot)
+	/* Microsoft uses 1-based indexing for the egfx bitmap cache ! */
+	if (cacheSlot == 0 || cacheSlot > gfx->MaxCacheSlots)
 	{
-		WLog_ERR(TAG, "%s: invalid cache slot %" PRIu16 " maxAllowed=%" PRIu16 "", __FUNCTION__,
-		         cacheSlot, gfx->MaxCacheSlot);
+		WLog_ERR(TAG, "%s: invalid cache slot %" PRIu16 ", must be between 1 and %" PRIu16 "",
+		         __FUNCTION__, cacheSlot, gfx->MaxCacheSlots);
 		return ERROR_INVALID_INDEX;
 	}
 
-	gfx->CacheSlots[cacheSlot] = pData;
+	gfx->CacheSlots[cacheSlot - 1] = pData;
 	return CHANNEL_RC_OK;
 }
 
@@ -2007,14 +2012,15 @@ static void* rdpgfx_get_cache_slot_data(RdpgfxClientContext* context, UINT16 cac
 	void* pData = NULL;
 	RDPGFX_PLUGIN* gfx = (RDPGFX_PLUGIN*)context->handle;
 
-	if (cacheSlot >= gfx->MaxCacheSlot)
+	/* Microsoft uses 1-based indexing for the egfx bitmap cache ! */
+	if (cacheSlot == 0 || cacheSlot > gfx->MaxCacheSlots)
 	{
-		WLog_ERR(TAG, "%s: invalid cache slot %" PRIu16 " maxAllowed=%" PRIu16 "", __FUNCTION__,
-		         cacheSlot, gfx->MaxCacheSlot);
+		WLog_ERR(TAG, "%s: invalid cache slot %" PRIu16 ", must be between 1 and %" PRIu16 "",
+		         __FUNCTION__, cacheSlot, gfx->MaxCacheSlots);
 		return NULL;
 	}
 
-	pData = gfx->CacheSlots[cacheSlot];
+	pData = gfx->CacheSlots[cacheSlot - 1];
 	return pData;
 }
 
@@ -2069,7 +2075,7 @@ RdpgfxClientContext* rdpgfx_client_context_new(rdpSettings* settings)
 	if (gfx->H264)
 		gfx->SmallCache = TRUE;
 
-	gfx->MaxCacheSlot = gfx->SmallCache ? 4096 : 25600;
+	gfx->MaxCacheSlots = gfx->SmallCache ? 4096 : 25600;
 	context = (RdpgfxClientContext*)calloc(1, sizeof(RdpgfxClientContext));
 
 	if (!context)
@@ -2115,7 +2121,7 @@ void rdpgfx_client_context_free(RdpgfxClientContext* context)
 	gfx = (RDPGFX_PLUGIN*)context->handle;
 
 	free_surfaces(context, gfx->SurfaceTable);
-	evict_cache_slots(context, gfx->MaxCacheSlot, gfx->CacheSlots);
+	evict_cache_slots(context, gfx->MaxCacheSlots, gfx->CacheSlots);
 
 	if (gfx->listener_callback)
 	{

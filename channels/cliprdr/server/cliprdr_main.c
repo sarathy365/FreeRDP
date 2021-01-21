@@ -432,6 +432,9 @@ cliprdr_server_file_contents_response(CliprdrServerContext* context,
 static UINT cliprdr_server_receive_general_capability(CliprdrServerContext* context, wStream* s,
                                                       CLIPRDR_GENERAL_CAPABILITY_SET* cap_set)
 {
+	if (Stream_GetRemainingLength(s) < 8)
+		return ERROR_INVALID_DATA;
+
 	Stream_Read_UINT32(s, cap_set->version);      /* version (4 bytes) */
 	Stream_Read_UINT32(s, cap_set->generalFlags); /* generalFlags (4 bytes) */
 
@@ -464,29 +467,33 @@ static UINT cliprdr_server_receive_capabilities(CliprdrServerContext* context, w
 	UINT16 index;
 	UINT16 capabilitySetType;
 	UINT16 capabilitySetLength;
-	UINT error = CHANNEL_RC_OK;
+	UINT error = ERROR_INVALID_DATA;
 	size_t cap_sets_size = 0;
-	CLIPRDR_CAPABILITIES capabilities;
+	CLIPRDR_CAPABILITIES capabilities = { 0 };
 	CLIPRDR_CAPABILITY_SET* capSet;
-	void* tmp;
 
 	WINPR_UNUSED(header);
 
-	/* set `capabilitySets` to NULL so `realloc` will know to alloc the first block */
-	capabilities.capabilitySets = NULL;
 
 	WLog_DBG(TAG, "CliprdrClientCapabilities");
+	if (Stream_GetRemainingLength(s) < 4)
+		return ERROR_INVALID_DATA;
+
 	Stream_Read_UINT16(s, capabilities.cCapabilitiesSets); /* cCapabilitiesSets (2 bytes) */
 	Stream_Seek_UINT16(s);                                 /* pad1 (2 bytes) */
 
 	for (index = 0; index < capabilities.cCapabilitiesSets; index++)
 	{
+		void* tmp = NULL;
+		if (Stream_GetRemainingLength(s) < 4)
+			goto out;
 		Stream_Read_UINT16(s, capabilitySetType);   /* capabilitySetType (2 bytes) */
 		Stream_Read_UINT16(s, capabilitySetLength); /* capabilitySetLength (2 bytes) */
 
 		cap_sets_size += capabilitySetLength;
 
-		tmp = realloc(capabilities.capabilitySets, cap_sets_size);
+		if (cap_sets_size > 0)
+			tmp = realloc(capabilities.capabilitySets, cap_sets_size);
 		if (tmp == NULL)
 		{
 			WLog_ERR(TAG, "capabilities.capabilitySets realloc failed!");
@@ -504,8 +511,9 @@ static UINT cliprdr_server_receive_capabilities(CliprdrServerContext* context, w
 		switch (capSet->capabilitySetType)
 		{
 			case CB_CAPSTYPE_GENERAL:
-				if ((error = cliprdr_server_receive_general_capability(
-				         context, s, (CLIPRDR_GENERAL_CAPABILITY_SET*)capSet)))
+				error = cliprdr_server_receive_general_capability(
+				    context, s, (CLIPRDR_GENERAL_CAPABILITY_SET*)capSet);
+				if (error)
 				{
 					WLog_ERR(TAG,
 					         "cliprdr_server_receive_general_capability failed with error %" PRIu32
@@ -518,11 +526,11 @@ static UINT cliprdr_server_receive_capabilities(CliprdrServerContext* context, w
 			default:
 				WLog_ERR(TAG, "unknown cliprdr capability set: %" PRIu16 "",
 				         capSet->capabilitySetType);
-				error = ERROR_INVALID_DATA;
 				goto out;
 		}
 	}
 
+	error = CHANNEL_RC_OK;
 	IFCALLRET(context->ClientCapabilities, error, context, &capabilities);
 out:
 	free(capabilities.capabilitySets);
@@ -545,7 +553,7 @@ static UINT cliprdr_server_receive_temporary_directory(CliprdrServerContext* con
 	UINT error = CHANNEL_RC_OK;
 
 	WINPR_UNUSED(header);
-	if ((slength = Stream_GetRemainingLength(s)) < 520)
+	if ((slength = Stream_GetRemainingLength(s)) < 260 * sizeof(WCHAR))
 	{
 		WLog_ERR(TAG, "Stream_GetRemainingLength returned %" PRIuz " but should at least be 520",
 		         slength);
@@ -554,9 +562,9 @@ static UINT cliprdr_server_receive_temporary_directory(CliprdrServerContext* con
 
 	wszTempDir = (WCHAR*)Stream_Pointer(s);
 
-	if (wszTempDir[260] != 0)
+	if (wszTempDir[259] != 0)
 	{
-		WLog_ERR(TAG, "wszTempDir[260] was not 0");
+		WLog_ERR(TAG, "wszTempDir[259] was not 0");
 		return ERROR_INVALID_DATA;
 	}
 
@@ -570,10 +578,10 @@ static UINT cliprdr_server_receive_temporary_directory(CliprdrServerContext* con
 		return ERROR_INVALID_DATA;
 	}
 
-	length = strnlen(cliprdr->temporaryDirectory, 520);
+	length = strnlen(cliprdr->temporaryDirectory, 260);
 
-	if (length > 519)
-		length = 519;
+	if (length >= 260)
+		length = 259;
 
 	CopyMemory(tempDirectory.szTempDir, cliprdr->temporaryDirectory, length);
 	tempDirectory.szTempDir[length] = '\0';

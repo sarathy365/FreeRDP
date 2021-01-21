@@ -248,12 +248,14 @@ static BOOL winpr_match_unix_timezone_identifier_with_list(const char* tzid, con
 {
 	char* p;
 	char* list_copy;
+	char* context = NULL;
+
 	list_copy = _strdup(list);
 
 	if (!list_copy)
 		return FALSE;
 
-	p = strtok(list_copy, " ");
+	p = strtok_s(list_copy, " ", &context);
 
 	while (p != NULL)
 	{
@@ -263,7 +265,7 @@ static BOOL winpr_match_unix_timezone_identifier_with_list(const char* tzid, con
 			return TRUE;
 		}
 
-		p = strtok(NULL, " ");
+		p = strtok_s(NULL, " ", &context);
 	}
 
 	free(list_copy);
@@ -337,12 +339,16 @@ winpr_get_current_time_zone_rule(const TIME_ZONE_RULE_ENTRY* rules, UINT32 count
 DWORD GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation)
 {
 	time_t t;
+	struct tm tres;
 	struct tm* local_time;
-	TIME_ZONE_ENTRY* dtz;
+	TIME_ZONE_ENTRY* dtz = NULL;
 	LPTIME_ZONE_INFORMATION tz = lpTimeZoneInformation;
 	lpTimeZoneInformation->StandardBias = 0;
 	time(&t);
-	local_time = localtime(&t);
+	local_time = localtime_r(&t, &tres);
+	if (!local_time)
+		goto out_error;
+
 	memset(tz, 0, sizeof(TIME_ZONE_INFORMATION));
 #ifdef HAVE_TM_GMTOFF
 	{

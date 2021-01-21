@@ -488,7 +488,8 @@ int freerdp_message_queue_process_pending_messages(freerdp* instance, DWORD id)
 	return status;
 }
 
-static int freerdp_send_channel_data(freerdp* instance, UINT16 channelId, BYTE* data, int size)
+static BOOL freerdp_send_channel_data(freerdp* instance, UINT16 channelId, const BYTE* data,
+                                      size_t size)
 {
 	return rdp_send_channel_data(instance->context->rdp, channelId, data, size);
 }
@@ -671,6 +672,7 @@ BOOL freerdp_context_new(freerdp* instance)
 	instance->update = rdp->update;
 	instance->settings = rdp->settings;
 	instance->autodetect = rdp->autodetect;
+	instance->heartbeat = rdp->heartbeat;
 	context->graphics = graphics_new(context);
 
 	if (!context->graphics)
@@ -999,7 +1001,7 @@ const char* freerdp_get_logon_error_info_data(UINT32 data)
 /** Allocator function for the rdp_freerdp structure.
  *  @return an allocated structure filled with 0s. Need to be deallocated using freerdp_free()
  */
-freerdp* freerdp_new()
+freerdp* freerdp_new(void)
 {
 	freerdp* instance;
 	instance = (freerdp*)calloc(1, sizeof(freerdp));

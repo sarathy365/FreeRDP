@@ -112,13 +112,28 @@ typedef struct _RDPEI_PLUGIN RDPEI_PLUGIN;
  */
 static UINT rdpei_send_frame(RdpeiClientContext* context);
 
-static const char* RDPEI_EVENTID_STRINGS[] = { "",
-	                                           "EVENTID_SC_READY",
-	                                           "EVENTID_CS_READY",
-	                                           "EVENTID_TOUCH",
-	                                           "EVENTID_SUSPEND_TOUCH",
-	                                           "EVENTID_RESUME_TOUCH",
-	                                           "EVENTID_DISMISS_HOVERING_CONTACT" };
+#ifdef WITH_DEBUG_RDPEI
+static const char* rdpei_eventid_string(UINT16 event)
+{
+	switch (event)
+	{
+		case EVENTID_SC_READY:
+			return "EVENTID_SC_READY";
+		case EVENTID_CS_READY:
+			return "EVENTID_CS_READY";
+		case EVENTID_TOUCH:
+			return "EVENTID_TOUCH";
+		case EVENTID_SUSPEND_TOUCH:
+			return "EVENTID_SUSPEND_TOUCH";
+		case EVENTID_RESUME_TOUCH:
+			return "EVENTID_RESUME_TOUCH";
+		case EVENTID_DISMISS_HOVERING_CONTACT:
+			return "EVENTID_DISMISS_HOVERING_CONTACT";
+		default:
+			return "EVENTID_UNKNOWN";
+	}
+}
+#endif
 
 /**
  * Function description
@@ -179,7 +194,7 @@ static UINT rdpei_send_pdu(RDPEI_CHANNEL_CALLBACK* callback, wStream* s, UINT16 
 #ifdef WITH_DEBUG_RDPEI
 	WLog_DBG(TAG,
 	         "rdpei_send_pdu: eventId: %" PRIu16 " (%s) length: %" PRIu32 " status: %" PRIu32 "",
-	         eventId, RDPEI_EVENTID_STRINGS[eventId], pduLength, status);
+	         eventId, rdpei_eventid_string(eventId), pduLength, status);
 #endif
 	return status;
 }
@@ -430,11 +445,14 @@ static UINT rdpei_recv_pdu(RDPEI_CHANNEL_CALLBACK* callback, wStream* s)
 	UINT16 eventId;
 	UINT32 pduLength;
 	UINT error;
+	if (Stream_GetRemainingLength(s) < 6)
+		return ERROR_INVALID_DATA;
+
 	Stream_Read_UINT16(s, eventId);   /* eventId (2 bytes) */
 	Stream_Read_UINT32(s, pduLength); /* pduLength (4 bytes) */
 #ifdef WITH_DEBUG_RDPEI
 	WLog_DBG(TAG, "rdpei_recv_pdu: eventId: %" PRIu16 " (%s) length: %" PRIu32 "", eventId,
-	         RDPEI_EVENTID_STRINGS[eventId], pduLength);
+	         rdpei_eventid_string(eventId), pduLength);
 #endif
 
 	switch (eventId)
@@ -553,8 +571,7 @@ static UINT rdpei_plugin_initialize(IWTSPlugin* pPlugin, IWTSVirtualChannelManag
 	rdpei->listener_callback->channel_mgr = pChannelMgr;
 
 	if ((error = pChannelMgr->CreateListener(pChannelMgr, RDPEI_DVC_CHANNEL_NAME, 0,
-	                                         (IWTSListenerCallback*)rdpei->listener_callback,
-	                                         &(rdpei->listener))))
+	                                         &rdpei->listener_callback->iface, &(rdpei->listener))))
 	{
 		WLog_ERR(TAG, "ChannelMgr->CreateListener failed with error %" PRIu32 "!", error);
 		goto error_out;
@@ -580,7 +597,14 @@ static UINT rdpei_plugin_terminated(IWTSPlugin* pPlugin)
 	if (!pPlugin)
 		return ERROR_INVALID_PARAMETER;
 
+	if (rdpei && rdpei->listener_callback)
+	{
+		IWTSVirtualChannelManager* mgr = rdpei->listener_callback->channel_mgr;
+		if (mgr)
+			IFCALL(mgr->DestroyListener, mgr, rdpei->listener);
+	}
 	free(rdpei->listener_callback);
+	free(rdpei->contactPoints);
 	free(rdpei->context);
 	free(rdpei);
 	return CHANNEL_RC_OK;

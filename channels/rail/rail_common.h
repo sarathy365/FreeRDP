@@ -26,8 +26,6 @@
 
 #include <freerdp/rail.h>
 
-extern const char* const RAIL_ORDER_TYPE_STRINGS[];
-
 #define RAIL_PDU_HEADER_LENGTH 4
 
 /* Fixed length of PDUs, excluding variable lengths */
@@ -72,5 +70,6 @@ UINT rail_read_sysparam_order(wStream* s, RAIL_SYSPARAM_ORDER* sysparam, BOOL ex
 UINT rail_write_sysparam_order(wStream* s, const RAIL_SYSPARAM_ORDER* sysparam,
                                BOOL extendedSpiSupported);
 BOOL rail_is_extended_spi_supported(UINT32 channelsFlags);
+const char* rail_get_order_type_string(UINT16 orderType);
 
 #endif /* FREERDP_CHANNEL_RAIL_COMMON_H */

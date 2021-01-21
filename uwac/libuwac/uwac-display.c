@@ -42,12 +42,14 @@
 #define TARGET_SEAT_INTERFACE 5U
 #define TARGET_XDG_VERSION 5U /* The version of xdg-shell that we implement */
 
+#if !defined(NDEBUG)
 static const char* event_names[] = {
 	"new seat",      "removed seat",      "new output",      "configure",    "pointer enter",
 	"pointer leave", "pointer motion",    "pointer buttons", "pointer axis", "keyboard enter",
 	"key",           "touch frame begin", "touch up",        "touch down",   "touch motion",
 	"touch cancel",  "touch frame end",   "frame done",      "close",        NULL
 };
+#endif
 
 static bool uwac_default_error_handler(UwacDisplay* display, UwacReturnCode code, const char* msg,
                                        ...)
@@ -659,35 +661,53 @@ UwacReturnCode UwacDisplayQueryShmFormats(const UwacDisplay* display, enum wl_sh
 	return UWAC_SUCCESS;
 }
 
-uint32_t UwacDisplayGetNbOutputs(UwacDisplay* display)
+uint32_t UwacDisplayGetNbOutputs(const UwacDisplay* display)
 {
 	return wl_list_length(&display->outputs);
 }
 
-UwacOutput* UwacDisplayGetOutput(UwacDisplay* display, int index)
+const UwacOutput* UwacDisplayGetOutput(UwacDisplay* display, int index)
 {
-	struct wl_list* l;
-	int i;
+	int i, display_count;
+	UwacOutput* ret = NULL;
 
 	if (!display)
 		return NULL;
 
-	for (i = 0, l = &display->outputs; l && i < index; i++, l = l->next)
-		;
+	display_count = wl_list_length(&display->outputs);
+	if (display_count <= index)
+		return NULL;
 
-	if (!l)
+	i = 0;
+	wl_list_for_each(ret, &display->outputs, link)
+	{
+		if (i == index)
+			break;
+		i++;
+	}
+
+	if (!ret)
 	{
 		display->last_error = UWAC_NOT_FOUND;
 		return NULL;
 	}
 
 	display->last_error = UWAC_SUCCESS;
-	return container_of(l, UwacOutput, link);
+	return ret;
 }
 
-UwacReturnCode UwacOutputGetResolution(UwacOutput* output, UwacSize* resolution)
+UwacReturnCode UwacOutputGetResolution(const UwacOutput* output, UwacSize* resolution)
 {
+	if ((output->resolution.height <= 0) || (output->resolution.width <= 0))
+		return UWAC_ERROR_INTERNAL;
+
 	*resolution = output->resolution;
+	return UWAC_SUCCESS;
+}
+
+UwacReturnCode UwacOutputGetPosition(const UwacOutput* output, UwacPosition* pos)
+{
+	*pos = output->position;
 	return UWAC_SUCCESS;
 }
 

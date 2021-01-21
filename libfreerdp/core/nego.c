@@ -91,9 +91,9 @@ static BOOL nego_security_connect(rdpNego* nego);
 static BOOL nego_send_preconnection_pdu(rdpNego* nego);
 static BOOL nego_recv_response(rdpNego* nego);
 static void nego_send(rdpNego* nego);
-static void nego_process_negotiation_request(rdpNego* nego, wStream* s);
-static void nego_process_negotiation_response(rdpNego* nego, wStream* s);
-static void nego_process_negotiation_failure(rdpNego* nego, wStream* s);
+static BOOL nego_process_negotiation_request(rdpNego* nego, wStream* s);
+static BOOL nego_process_negotiation_response(rdpNego* nego, wStream* s);
+static BOOL nego_process_negotiation_failure(rdpNego* nego, wStream* s);
 
 /**
  * Negotiate protocol security and connect.
@@ -607,10 +607,7 @@ int nego_recv(rdpTransport* transport, wStream* s, void* extra)
 	if (!tpkt_read_header(s, &length))
 		return -1;
 
-	if (length == 0)
-		return -1;
-
-	if (!tpdu_read_connection_confirm(s, &li))
+	if (!tpdu_read_connection_confirm(s, &li, length))
 		return -1;
 
 	if (li > 6)
@@ -621,7 +618,8 @@ int nego_recv(rdpTransport* transport, wStream* s, void* extra)
 		switch (type)
 		{
 			case TYPE_RDP_NEG_RSP:
-				nego_process_negotiation_response(nego, s);
+				if (!nego_process_negotiation_response(nego, s))
+					return -1;
 				WLog_DBG(TAG, "selected_protocol: %" PRIu32 "", nego->SelectedProtocol);
 
 				/* enhanced security selected ? */
@@ -648,7 +646,8 @@ int nego_recv(rdpTransport* transport, wStream* s, void* extra)
 				break;
 
 			case TYPE_RDP_NEG_FAILURE:
-				nego_process_negotiation_failure(nego, s);
+				if (!nego_process_negotiation_failure(nego, s))
+					return -1;
 				break;
 		}
 	}
@@ -667,6 +666,8 @@ int nego_recv(rdpTransport* transport, wStream* s, void* extra)
 		nego->state = NEGO_STATE_FAIL;
 	}
 
+	if (!tpkt_ensure_stream_consumed(s, length))
+		return -1;
 	return 0;
 }
 
@@ -770,7 +771,7 @@ BOOL nego_read_request(rdpNego* nego, wStream* s)
 	if (!tpkt_read_header(s, &length))
 		return FALSE;
 
-	if (!tpdu_read_connection_request(s, &li))
+	if (!tpdu_read_connection_request(s, &li, length))
 		return FALSE;
 
 	if (li != Stream_GetRemainingLength(s) + 6)
@@ -796,10 +797,11 @@ BOOL nego_read_request(rdpNego* nego, wStream* s)
 			return FALSE;
 		}
 
-		nego_process_negotiation_request(nego, s);
+		if (!nego_process_negotiation_request(nego, s))
+			return FALSE;
 	}
 
-	return TRUE;
+	return tpkt_ensure_stream_consumed(s, length);
 }
 
 /**
@@ -919,15 +921,19 @@ fail:
  * @param s
  */
 
-void nego_process_negotiation_request(rdpNego* nego, wStream* s)
+BOOL nego_process_negotiation_request(rdpNego* nego, wStream* s)
 {
 	BYTE flags;
 	UINT16 length;
+
+	if (Stream_GetRemainingLength(s) < 7)
+		return FALSE;
 	Stream_Read_UINT8(s, flags);
 	Stream_Read_UINT16(s, length);
 	Stream_Read_UINT32(s, nego->RequestedProtocols);
 	WLog_DBG(TAG, "RDP_NEG_REQ: RequestedProtocol: 0x%08" PRIX32 "", nego->RequestedProtocols);
 	nego->state = NEGO_STATE_FINAL;
+	return TRUE;
 }
 
 /**
@@ -936,7 +942,7 @@ void nego_process_negotiation_request(rdpNego* nego, wStream* s)
  * @param s
  */
 
-void nego_process_negotiation_response(rdpNego* nego, wStream* s)
+BOOL nego_process_negotiation_response(rdpNego* nego, wStream* s)
 {
 	UINT16 length;
 	WLog_DBG(TAG, "RDP_NEG_RSP");
@@ -945,13 +951,14 @@ void nego_process_negotiation_response(rdpNego* nego, wStream* s)
 	{
 		WLog_ERR(TAG, "Invalid RDP_NEG_RSP");
 		nego->state = NEGO_STATE_FAIL;
-		return;
+		return FALSE;
 	}
 
 	Stream_Read_UINT8(s, nego->flags);
 	Stream_Read_UINT16(s, length);
 	Stream_Read_UINT32(s, nego->SelectedProtocol);
 	nego->state = NEGO_STATE_FINAL;
+	return TRUE;
 }
 
 /**
@@ -960,12 +967,14 @@ void nego_process_negotiation_response(rdpNego* nego, wStream* s)
  * @param s
  */
 
-void nego_process_negotiation_failure(rdpNego* nego, wStream* s)
+BOOL nego_process_negotiation_failure(rdpNego* nego, wStream* s)
 {
 	BYTE flags;
 	UINT16 length;
 	UINT32 failureCode;
 	WLog_DBG(TAG, "RDP_NEG_FAILURE");
+	if (Stream_GetRemainingLength(s) < 7)
+		return FALSE;
 	Stream_Read_UINT8(s, flags);
 	Stream_Read_UINT16(s, length);
 	Stream_Read_UINT32(s, failureCode);
@@ -1000,6 +1009,7 @@ void nego_process_negotiation_failure(rdpNego* nego, wStream* s)
 	}
 
 	nego->state = NEGO_STATE_FAIL;
+	return TRUE;
 }
 
 /**

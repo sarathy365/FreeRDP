@@ -42,6 +42,8 @@ typedef BOOL (*moduleEntryPoint)(proxyPluginsManager* plugins_manager);
 static const char* FILTER_TYPE_STRINGS[] = {
 	"KEYBOARD_EVENT",
 	"MOUSE_EVENT",
+	"CLIENT_CHANNEL_DATA",
+	"SERVER_CHANNEL_DATA",
 };
 
 static const char* HOOK_TYPE_STRINGS[] = {
@@ -74,7 +76,7 @@ static const char* pf_modules_get_hook_type_string(PF_HOOK_TYPE result)
 BOOL pf_modules_run_hook(PF_HOOK_TYPE type, proxyData* pdata)
 {
 	BOOL ok = TRUE;
-	size_t index;
+	int index;
 	proxyPlugin* plugin;
 
 	ArrayList_ForEach(plugins_list, proxyPlugin*, index, plugin)
@@ -127,7 +129,7 @@ BOOL pf_modules_run_hook(PF_HOOK_TYPE type, proxyData* pdata)
 BOOL pf_modules_run_filter(PF_FILTER_TYPE type, proxyData* pdata, void* param)
 {
 	BOOL result = TRUE;
-	size_t index;
+	int index;
 	proxyPlugin* plugin;
 
 	ArrayList_ForEach(plugins_list, proxyPlugin*, index, plugin)
@@ -144,6 +146,13 @@ BOOL pf_modules_run_filter(PF_FILTER_TYPE type, proxyData* pdata, void* param)
 				IFCALLRET(plugin->MouseEvent, result, pdata, param);
 				break;
 
+			case FILTER_TYPE_CLIENT_PASSTHROUGH_CHANNEL_DATA:
+				IFCALLRET(plugin->ClientChannelData, result, pdata, param);
+				break;
+
+			case FILTER_TYPE_SERVER_PASSTHROUGH_CHANNEL_DATA:
+				IFCALLRET(plugin->ServerChannelData, result, pdata, param);
+				break;
 			default:
 				WLog_ERR(TAG, "invalid filter called");
 		}
@@ -151,8 +160,8 @@ BOOL pf_modules_run_filter(PF_FILTER_TYPE type, proxyData* pdata, void* param)
 		if (!result)
 		{
 			/* current filter return FALSE, no need to run other filters. */
-			WLog_INFO(TAG, "plugin %s, filter type [%s] returned FALSE", plugin->name,
-			          pf_modules_get_filter_type_string(type));
+			WLog_DBG(TAG, "plugin %s, filter type [%s] returned FALSE", plugin->name,
+			         pf_modules_get_filter_type_string(type));
 			return result;
 		}
 	}
@@ -169,12 +178,18 @@ BOOL pf_modules_run_filter(PF_FILTER_TYPE type, proxyData* pdata, void* param)
  */
 static BOOL pf_modules_set_plugin_data(const char* plugin_name, proxyData* pdata, void* data)
 {
+	union {
+		const char* ccp;
+		char* cp;
+	} ccharconv;
+
 	assert(plugin_name);
 
+	ccharconv.ccp = plugin_name;
 	if (data == NULL) /* no need to store anything */
 		return FALSE;
 
-	if (HashTable_Add(pdata->modules_info, (void*)plugin_name, data) < 0)
+	if (HashTable_Add(pdata->modules_info, ccharconv.cp, data) < 0)
 	{
 		WLog_ERR(TAG, "[%s]: HashTable_Add failed!");
 		return FALSE;
@@ -192,10 +207,15 @@ static BOOL pf_modules_set_plugin_data(const char* plugin_name, proxyData* pdata
  */
 static void* pf_modules_get_plugin_data(const char* plugin_name, proxyData* pdata)
 {
+	union {
+		const char* ccp;
+		char* cp;
+	} ccharconv;
 	assert(plugin_name);
 	assert(pdata);
+	ccharconv.ccp = plugin_name;
 
-	return HashTable_GetItemValue(pdata->modules_info, (void*)plugin_name);
+	return HashTable_GetItemValue(pdata->modules_info, ccharconv.cp);
 }
 
 static void pf_modules_abort_connect(proxyData* pdata)
@@ -207,10 +227,11 @@ static void pf_modules_abort_connect(proxyData* pdata)
 
 static BOOL pf_modules_register_plugin(proxyPlugin* plugin_to_register)
 {
-	size_t index;
+	int index;
 	proxyPlugin* plugin;
 
-	assert(plugins_list != NULL);
+	if (!plugin_to_register)
+		return FALSE;
 
 	/* make sure there's no other loaded plugin with the same name of `plugin_to_register`. */
 	ArrayList_ForEach(plugins_list, proxyPlugin*, index, plugin)
@@ -224,7 +245,8 @@ static BOOL pf_modules_register_plugin(proxyPlugin* plugin_to_register)
 
 	if (ArrayList_Add(plugins_list, plugin_to_register) < 0)
 	{
-		WLog_ERR(TAG, "[%s]: failed adding plugin to list: %s", __FUNCTION__, plugin->name);
+		WLog_ERR(TAG, "[%s]: failed adding plugin to list: %s", __FUNCTION__,
+		         plugin_to_register->name);
 		return FALSE;
 	}
 
@@ -233,7 +255,7 @@ static BOOL pf_modules_register_plugin(proxyPlugin* plugin_to_register)
 
 BOOL pf_modules_is_plugin_loaded(const char* plugin_name)
 {
-	size_t i;
+	int i;
 	proxyPlugin* plugin;
 
 	if (plugins_list == NULL)
@@ -251,7 +273,7 @@ BOOL pf_modules_is_plugin_loaded(const char* plugin_name)
 void pf_modules_list_loaded_plugins(void)
 {
 	size_t count;
-	size_t i;
+	int i;
 	proxyPlugin* plugin;
 
 	if (plugins_list == NULL)
@@ -365,7 +387,7 @@ error:
 
 void pf_modules_free(void)
 {
-	size_t index;
+	int index;
 
 	if (plugins_list)
 	{

@@ -128,6 +128,7 @@ static INLINE void shadow_client_free_queued_message(void* obj)
 
 static BOOL shadow_client_context_new(freerdp_peer* peer, rdpShadowClient* client)
 {
+	const char bind_address[] = "bind-address,";
 	rdpSettings* settings;
 	rdpShadowServer* server;
 	const wObject cb = { NULL, NULL, NULL, shadow_client_free_queued_message, NULL };
@@ -157,7 +158,8 @@ static BOOL shadow_client_context_new(freerdp_peer* peer, rdpShadowClient* clien
 	if (!(settings->RdpKeyFile = _strdup(settings->PrivateKeyFile)))
 		goto fail_rdpkey_file;
 
-	if (server->ipcSocket)
+	if (server->ipcSocket && (strncmp(bind_address, server->ipcSocket,
+	                                  strnlen(bind_address, sizeof(bind_address))) != 0))
 	{
 		settings->LyncRdpMode = TRUE;
 		settings->CompressionEnabled = FALSE;
@@ -227,21 +229,6 @@ static void shadow_client_context_free(freerdp_peer* peer, rdpShadowClient* clie
 	client->vcm = NULL;
 	region16_uninit(&(client->invalidRegion));
 	DeleteCriticalSection(&(client->lock));
-}
-
-static void shadow_client_message_free(wMessage* message)
-{
-	switch (message->id)
-	{
-		case SHADOW_MSG_IN_REFRESH_REQUEST_ID:
-			/* Refresh request do not have message to free */
-			break;
-
-		default:
-			WLog_ERR(TAG, "Unknown message id: %" PRIu32 "", message->id);
-			free(message->wParam);
-			break;
-	}
 }
 
 static INLINE void shadow_client_mark_invalid(rdpShadowClient* client, int numRects,
@@ -423,8 +410,9 @@ static BOOL shadow_client_refresh_request(rdpShadowClient* client)
 	return MessageQueue_Dispatch(MsgPipe->In, &message);
 }
 
-static BOOL shadow_client_refresh_rect(rdpShadowClient* client, BYTE count, RECTANGLE_16* areas)
+static BOOL shadow_client_refresh_rect(rdpContext* context, BYTE count, const RECTANGLE_16* areas)
 {
+	rdpShadowClient* client = (rdpShadowClient*)context;
 	RECTANGLE_16* rects;
 
 	/* It is invalid if we have area count but no actual area */
@@ -452,8 +440,9 @@ static BOOL shadow_client_refresh_rect(rdpShadowClient* client, BYTE count, RECT
 	return shadow_client_refresh_request(client);
 }
 
-static BOOL shadow_client_suppress_output(rdpShadowClient* client, BYTE allow, RECTANGLE_16* area)
+static BOOL shadow_client_suppress_output(rdpContext* context, BYTE allow, const RECTANGLE_16* area)
 {
+	rdpShadowClient* client = (rdpShadowClient*)context;
 	RECTANGLE_16 region;
 	client->suppressOutput = allow ? FALSE : TRUE;
 
@@ -497,7 +486,7 @@ static BOOL shadow_client_activate(freerdp_peer* peer)
 	}
 
 	/* Update full screen in next update */
-	return shadow_client_refresh_rect(client, 0, NULL);
+	return shadow_client_refresh_rect(&client->context, 0, NULL);
 }
 
 static BOOL shadow_client_logon(freerdp_peer* peer, SEC_WINNT_AUTH_IDENTITY* identity,
@@ -583,8 +572,9 @@ static INLINE void shadow_client_common_frame_acknowledge(rdpShadowClient* clien
 	client->encoder->lastAckframeId = frameId;
 }
 
-static BOOL shadow_client_surface_frame_acknowledge(rdpShadowClient* client, UINT32 frameId)
+static BOOL shadow_client_surface_frame_acknowledge(rdpContext* context, UINT32 frameId)
 {
+	rdpShadowClient* client = (rdpShadowClient*)context;
 	shadow_client_common_frame_acknowledge(client, frameId);
 	/*
 	 * Reset queueDepth for legacy none RDPGFX acknowledge
@@ -689,7 +679,7 @@ static UINT shadow_client_rdpgfx_caps_advertise(RdpgfxServerContext* context,
 #endif
 
 	/* Request full screen update for new gfx channel */
-	if (!shadow_client_refresh_rect((rdpShadowClient*)context->custom, 0, NULL))
+	if (!shadow_client_refresh_rect(&client->context, 0, NULL))
 		return rc;
 
 	if (shadow_client_caps_test_version(context, h264, capsAdvertise->capsSets,
@@ -988,6 +978,7 @@ static BOOL shadow_client_send_surface_bits(rdpShadowClient* client, BYTE* pSrcD
 			return FALSE;
 		}
 
+		cmd.cmdType = CMDTYPE_STREAM_SURFACE_BITS;
 		cmd.bmp.codecID = settings->RemoteFxCodecId;
 		cmd.destLeft = 0;
 		cmd.destTop = 0;
@@ -1052,6 +1043,7 @@ static BOOL shadow_client_send_surface_bits(rdpShadowClient* client, BYTE* pSrcD
 		Stream_SetPosition(s, 0);
 		pSrcData = &pSrcData[(nYSrc * nSrcStep) + (nXSrc * 4)];
 		nsc_compose_message(encoder->nsc, s, pSrcData, nWidth, nHeight, nSrcStep);
+		cmd.cmdType = CMDTYPE_SET_SURFACE_BITS;
 		cmd.bmp.bpp = 32;
 		cmd.bmp.codecID = settings->NSCodecId;
 		cmd.destLeft = nXSrc;
@@ -1339,12 +1331,12 @@ static BOOL shadow_client_send_surface_update(rdpShadowClient* client, SHADOW_GF
 	region16_copy(&invalidRegion, &(client->invalidRegion));
 	region16_clear(&(client->invalidRegion));
 	LeaveCriticalSection(&(client->lock));
+
+	EnterCriticalSection(&surface->lock);
 	rects = region16_rects(&(surface->invalidRegion), &numRects);
 
 	for (index = 0; index < numRects; index++)
-	{
 		region16_union_rect(&invalidRegion, &invalidRegion, &rects[index]);
-	}
 
 	surfaceRect.left = 0;
 	surfaceRect.top = 0;
@@ -1418,6 +1410,7 @@ static BOOL shadow_client_send_surface_update(rdpShadowClient* client, SHADOW_GF
 	}
 
 out:
+	LeaveCriticalSection(&surface->lock);
 	region16_uninit(&invalidRegion);
 	return ret;
 }
@@ -1646,10 +1639,9 @@ static DWORD WINAPI shadow_client_thread(LPVOID arg)
 	peer->Logon = shadow_client_logon;
 	shadow_input_register_callbacks(peer->input);
 	peer->Initialize(peer);
-	peer->update->RefreshRect = (pRefreshRect)shadow_client_refresh_rect;
-	peer->update->SuppressOutput = (pSuppressOutput)shadow_client_suppress_output;
-	peer->update->SurfaceFrameAcknowledge =
-	    (pSurfaceFrameAcknowledge)shadow_client_surface_frame_acknowledge;
+	peer->update->RefreshRect = shadow_client_refresh_rect;
+	peer->update->SuppressOutput = shadow_client_suppress_output;
+	peer->update->SurfaceFrameAcknowledge = shadow_client_surface_frame_acknowledge;
 
 	if ((!client->vcm) || (!subsystem->updateEvent))
 		goto out;

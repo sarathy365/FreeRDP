@@ -89,7 +89,9 @@
 
 #include "xf_gdi.h"
 #include "xf_rail.h"
+#if defined(CHANNEL_TSMF_CLIENT)
 #include "xf_tsmf.h"
+#endif
 #include "xf_event.h"
 #include "xf_input.h"
 #include "xf_cliprdr.h"
@@ -104,6 +106,8 @@
 
 #include <freerdp/log.h>
 #define TAG CLIENT_TAG("x11")
+
+#define MIN_PIXEL_DIFF 0.001
 
 static int (*_def_error_handler)(Display*, XErrorEvent*);
 static int _xf_error_handler(Display* d, XErrorEvent* ev);
@@ -168,16 +172,16 @@ static void xf_draw_screen_scaled(xfContext* xfc, int x, int y, int w, int h)
 	    XRenderCreatePicture(xfc->display, xfc->primary, picFormat, CPSubwindowMode, &pa);
 	windowPicture =
 	    XRenderCreatePicture(xfc->display, xfc->window->handle, picFormat, CPSubwindowMode, &pa);
-	// avoid blurry filter when scaling factor is 2x, 3x, etc
-	// useful when the client has high-dpi monitor
+	/* avoid blurry filter when scaling factor is 2x, 3x, etc
+	 * useful when the client has high-dpi monitor */
 	filter = FilterBilinear;
-	if (fabs(xScalingFactor - yScalingFactor) < DBL_EPSILON)
+	if (fabs(xScalingFactor - yScalingFactor) < MIN_PIXEL_DIFF)
 	{
 		const double inverseX = 1.0 / xScalingFactor;
 		const double inverseRoundedX = round(inverseX);
 		const double absInverse = fabs(inverseX - inverseRoundedX);
 
-		if (absInverse < DBL_EPSILON)
+		if (absInverse < MIN_PIXEL_DIFF)
 			filter = FilterNearest;
 	}
 	XRenderSetPictureFilter(xfc->display, primaryPicture, filter, 0, 0);
@@ -219,8 +223,15 @@ BOOL xf_picture_transform_required(xfContext* xfc)
 }
 #endif /* WITH_XRENDER defined */
 
-void xf_draw_screen(xfContext* xfc, int x, int y, int w, int h)
+void xf_draw_screen_(xfContext* xfc, int x, int y, int w, int h, const char* fkt, const char* file,
+                     int line)
 {
+	if (!xfc)
+	{
+		WLog_DBG(TAG, "[%s] called from [%s] xfc=%p", __FUNCTION__, fkt, xfc);
+		return;
+	}
+
 	if (w == 0 || h == 0)
 	{
 		WLog_WARN(TAG, "invalid width and/or height specified: w=%d h=%d", w, h);
@@ -322,17 +333,17 @@ static BOOL xf_sw_end_paint(rdpContext* context)
 			if (gdi->primary->hdc->hwnd->invalid->null)
 				return TRUE;
 
-			xf_lock_x11(xfc, FALSE);
+			xf_lock_x11(xfc);
 			XPutImage(xfc->display, xfc->primary, xfc->gc, xfc->image, x, y, x, y, w, h);
 			xf_draw_screen(xfc, x, y, w, h);
-			xf_unlock_x11(xfc, FALSE);
+			xf_unlock_x11(xfc);
 		}
 		else
 		{
 			if (gdi->primary->hdc->hwnd->ninvalid < 1)
 				return TRUE;
 
-			xf_lock_x11(xfc, FALSE);
+			xf_lock_x11(xfc);
 
 			for (i = 0; i < ninvalid; i++)
 			{
@@ -345,7 +356,7 @@ static BOOL xf_sw_end_paint(rdpContext* context)
 			}
 
 			XFlush(xfc->display);
-			xf_unlock_x11(xfc, FALSE);
+			xf_unlock_x11(xfc);
 		}
 	}
 	else
@@ -353,9 +364,9 @@ static BOOL xf_sw_end_paint(rdpContext* context)
 		if (gdi->primary->hdc->hwnd->invalid->null)
 			return TRUE;
 
-		xf_lock_x11(xfc, FALSE);
+		xf_lock_x11(xfc);
 		xf_rail_paint(xfc, x, y, x + w, y + h);
-		xf_unlock_x11(xfc, FALSE);
+		xf_unlock_x11(xfc);
 	}
 
 	gdi->primary->hdc->hwnd->invalid->null = TRUE;
@@ -369,7 +380,7 @@ static BOOL xf_sw_desktop_resize(rdpContext* context)
 	xfContext* xfc = (xfContext*)context;
 	rdpSettings* settings = context->settings;
 	BOOL ret = FALSE;
-	xf_lock_x11(xfc, TRUE);
+	xf_lock_x11(xfc);
 
 	if (!gdi_resize(gdi, settings->DesktopWidth, settings->DesktopHeight))
 		goto out;
@@ -391,7 +402,7 @@ static BOOL xf_sw_desktop_resize(rdpContext* context)
 	xfc->image->bitmap_bit_order = LSBFirst;
 	ret = xf_desktop_resize(context);
 out:
-	xf_unlock_x11(xfc, TRUE);
+	xf_unlock_x11(xfc);
 	return ret;
 }
 
@@ -415,9 +426,9 @@ static BOOL xf_hw_end_paint(rdpContext* context)
 			y = xfc->hdc->hwnd->invalid->y;
 			w = xfc->hdc->hwnd->invalid->w;
 			h = xfc->hdc->hwnd->invalid->h;
-			xf_lock_x11(xfc, FALSE);
+			xf_lock_x11(xfc);
 			xf_draw_screen(xfc, x, y, w, h);
-			xf_unlock_x11(xfc, FALSE);
+			xf_unlock_x11(xfc);
 		}
 		else
 		{
@@ -430,7 +441,7 @@ static BOOL xf_hw_end_paint(rdpContext* context)
 
 			ninvalid = xfc->hdc->hwnd->ninvalid;
 			cinvalid = xfc->hdc->hwnd->cinvalid;
-			xf_lock_x11(xfc, FALSE);
+			xf_lock_x11(xfc);
 
 			for (i = 0; i < ninvalid; i++)
 			{
@@ -442,7 +453,7 @@ static BOOL xf_hw_end_paint(rdpContext* context)
 			}
 
 			XFlush(xfc->display);
-			xf_unlock_x11(xfc, FALSE);
+			xf_unlock_x11(xfc);
 		}
 	}
 	else
@@ -454,9 +465,9 @@ static BOOL xf_hw_end_paint(rdpContext* context)
 		y = xfc->hdc->hwnd->invalid->y;
 		w = xfc->hdc->hwnd->invalid->w;
 		h = xfc->hdc->hwnd->invalid->h;
-		xf_lock_x11(xfc, FALSE);
+		xf_lock_x11(xfc);
 		xf_rail_paint(xfc, x, y, x + w, y + h);
-		xf_unlock_x11(xfc, FALSE);
+		xf_unlock_x11(xfc);
 	}
 
 	xfc->hdc->hwnd->invalid->null = TRUE;
@@ -470,14 +481,14 @@ static BOOL xf_hw_desktop_resize(rdpContext* context)
 	xfContext* xfc = (xfContext*)context;
 	rdpSettings* settings = context->settings;
 	BOOL ret = FALSE;
-	xf_lock_x11(xfc, TRUE);
+	xf_lock_x11(xfc);
 
 	if (!gdi_resize(gdi, settings->DesktopWidth, settings->DesktopHeight))
 		goto out;
 
 	ret = xf_desktop_resize(context);
 out:
-	xf_unlock_x11(xfc, TRUE);
+	xf_unlock_x11(xfc);
 	return ret;
 }
 
@@ -492,19 +503,18 @@ static BOOL xf_process_x_events(freerdp* instance)
 
 	while (pending_status)
 	{
-		xf_lock_x11(xfc, FALSE);
+		xf_lock_x11(xfc);
 		pending_status = XPending(xfc->display);
-		xf_unlock_x11(xfc, FALSE);
 
 		if (pending_status)
 		{
 			ZeroMemory(&xevent, sizeof(xevent));
 			XNextEvent(xfc->display, &xevent);
 			status = xf_event_process(instance, &xevent);
-
-			if (!status)
-				return status;
 		}
+		xf_unlock_x11(xfc);
+		if (!status)
+			break;
 	}
 
 	return status;
@@ -664,11 +674,13 @@ static void xf_window_free(xfContext* xfc)
 		xfc->hdc = NULL;
 	}
 
+#if defined(CHANNEL_TSMF_CLIENT)
 	if (xfc->xv_context)
 	{
 		xf_tsmf_uninit(xfc, NULL);
 		xfc->xv_context = NULL;
 	}
+#endif
 
 	if (xfc->image)
 	{
@@ -794,30 +806,31 @@ void xf_encomsp_uninit(xfContext* xfc, EncomspClientContext* encomsp)
 	xfc->encomsp = NULL;
 }
 
-void xf_lock_x11(xfContext* xfc, BOOL display)
+void xf_lock_x11_(xfContext* xfc, const char* fkt)
 {
+
 	if (!xfc->UseXThreads)
-	{
 		WaitForSingleObject(xfc->mutex, INFINITE);
-	}
 	else
-	{
-		if (display)
-			XLockDisplay(xfc->display);
-	}
+		XLockDisplay(xfc->display);
+
+	if (xfc->locked)
+		WLog_WARN(TAG, "%s:\t[%" PRIu32 "] recursive lock from %s", __FUNCTION__, xfc->locked, fkt);
+	xfc->locked++;
+	WLog_VRB(TAG, "%s:\t[%" PRIu32 "] from %s", __FUNCTION__, xfc->locked, fkt);
 }
 
-void xf_unlock_x11(xfContext* xfc, BOOL display)
+void xf_unlock_x11_(xfContext* xfc, const char* fkt)
 {
+	if (xfc->locked == 0)
+		WLog_WARN(TAG, "X11: trying to unlock although not locked!");
+
+	WLog_VRB(TAG, "%s:\t[%" PRIu32 "] from %s", __FUNCTION__, xfc->locked - 1, fkt);
 	if (!xfc->UseXThreads)
-	{
 		ReleaseMutex(xfc->mutex);
-	}
 	else
-	{
-		if (display)
-			XUnlockDisplay(xfc->display);
-	}
+		XUnlockDisplay(xfc->display);
+	xfc->locked--;
 }
 
 static BOOL xf_get_pixmap_info(xfContext* xfc)
@@ -970,9 +983,6 @@ static void xf_check_extensions(xfContext* context)
 /* this device when trying to find the input device which is the pointer.  */
 static const char TEST_PTR_STR[] = "Virtual core XTEST pointer";
 static const size_t TEST_PTR_LEN = sizeof(TEST_PTR_STR) / sizeof(char);
-
-/* Invalid device identifier which indicate failure. */
-static const int INVALID_XID = -1;
 #endif /* WITH_XI */
 
 static void xf_get_x11_button_map(xfContext* xfc, unsigned char* x11_map)
@@ -1110,7 +1120,7 @@ static void xf_button_map_init(xfContext* xfc)
 	x11_map[111] = 112;
 
 	/* query system for actual remapping */
-	if (!xfc->context.settings->UnmapButtons)
+	if (xfc->context.settings->UnmapButtons)
 	{
 		xf_get_x11_button_map(xfc, x11_map);
 	}
@@ -1132,8 +1142,8 @@ static void xf_button_map_init(xfContext* xfc)
 			else
 			{
 				button_map* map = &xfc->button_map[pos++];
-				map->button = physical + Button1;
-				map->flags = get_flags_for_button(logical);
+				map->button = logical;
+				map->flags = get_flags_for_button(physical + Button1);
 			}
 		}
 	}
@@ -1171,9 +1181,16 @@ static BOOL xf_pre_connect(freerdp* instance)
 
 	if (!settings->Username && !settings->CredentialsFromStdin && !settings->SmartcardLogon)
 	{
-		char* login_name = getlogin();
+		int rc;
+		char login_name[MAX_PATH] = { 0 };
 
-		if (login_name)
+#ifdef HAVE_GETLOGIN_R
+		rc = getlogin_r(login_name, sizeof(login_name));
+#else
+		strncpy(login_name, getlogin(), sizeof(login_name));
+		rc = 0;
+#endif
+		if (rc == 0)
 		{
 			settings->Username = _strdup(login_name);
 
@@ -1417,17 +1434,17 @@ static DWORD WINAPI xf_input_thread(LPVOID arg)
 				{
 					do
 					{
-						xf_lock_x11(xfc, FALSE);
+						xf_lock_x11(xfc);
 						pending_status = XPending(xfc->display);
-						xf_unlock_x11(xfc, FALSE);
+						xf_unlock_x11(xfc);
 
 						if (pending_status)
 						{
-							xf_lock_x11(xfc, FALSE);
+							xf_lock_x11(xfc);
 							ZeroMemory(&xevent, sizeof(xevent));
 							XNextEvent(xfc->display, &xevent);
 							process_status = xf_event_process(instance, &xevent);
-							xf_unlock_x11(xfc, FALSE);
+							xf_unlock_x11(xfc);
 
 							if (!process_status)
 								break;

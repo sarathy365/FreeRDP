@@ -215,7 +215,7 @@ static INLINE BOOL ensure_capacity(const BYTE* start, const BYTE* end, size_t si
 {
 	const size_t available = (uintptr_t)end - (uintptr_t)start;
 	const BOOL rc = available >= size * base;
-	return rc;
+	return rc && (start <= end);
 }
 
 static INLINE void write_pixel_8(BYTE* _buf, BYTE _pix)
@@ -232,7 +232,8 @@ static INLINE void write_pixel_24(BYTE* _buf, UINT32 _pix)
 
 static INLINE void write_pixel_16(BYTE* _buf, UINT16 _pix)
 {
-	*(UINT16*)_buf = _pix;
+	_buf[0] = _pix & 0xFF;
+	_buf[1] = (_pix >> 8) & 0xFF;
 }
 
 #undef DESTWRITEPIXEL
@@ -272,11 +273,7 @@ static INLINE void write_pixel_16(BYTE* _buf, UINT16 _pix)
 #define WHITE_PIXEL 0xFFFF
 #define DESTWRITEPIXEL(_buf, _pix) write_pixel_16(_buf, _pix)
 #define DESTREADPIXEL(_pix, _buf) _pix = ((UINT16*)(_buf))[0]
-#ifdef HAVE_ALIGNED_REQUIRED
 #define SRCREADPIXEL(_pix, _buf) _pix = (_buf)[0] | ((_buf)[1] << 8)
-#else
-#define SRCREADPIXEL(_pix, _buf) _pix = ((UINT16*)(_buf))[0]
-#endif
 #define DESTNEXTPIXEL(_buf) _buf += 2
 #define SRCNEXTPIXEL(_buf) _buf += 2
 #define WRITEFGBGIMAGE WriteFgBgImage16to16

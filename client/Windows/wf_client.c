@@ -70,6 +70,7 @@
 
 static BOOL wf_create_console(void)
 {
+#if defined(WITH_WIN_CONSOLE)
 	#pragma region Myrtille
 
 	// better have a process use its own console
@@ -81,12 +82,20 @@ static BOOL wf_create_console(void)
 
 	freopen("CONOUT$", "w", stdout);
 	freopen("CONOUT$", "w", stderr);
+	clearerr(stdout);
+	clearerr(stderr);
+	fflush(stdout);
+	fflush(stderr);
+
 	freopen("CONIN$", "r", stdin);
 	clearerr(stdin);
 
 	WLog_INFO(TAG, "Debug console created.");
 
 	return TRUE;
+#else
+	return FALSE;
+#endif
 }
 
 static BOOL wf_end_paint(rdpContext* context)
@@ -386,7 +395,7 @@ static WCHAR* wf_window_get_title(rdpSettings* settings)
 	}
 
 	port = (settings->ServerPort != 3389);
-	size = wcslen(name) + 16 + wcslen(prefix);
+	size = strlen(name) + 16 + wcslen(prefix);
 	windowTitle = calloc(size, sizeof(WCHAR));
 
 	if (!windowTitle)
@@ -588,6 +597,8 @@ static BOOL wf_authenticate_raw(freerdp* instance, const char* title, char** use
 	fSave = FALSE;
 	dwFlags = CREDUI_FLAGS_DO_NOT_PERSIST | CREDUI_FLAGS_EXCLUDE_CERTIFICATES;
 
+	if (username && *username)
+		strncpy(UserName, *username, CREDUI_MAX_USERNAME_LENGTH);
 	if (wfc->isConsole)
 		status = CredUICmdLinePromptForCredentialsA(
 		    title, NULL, 0, UserName, CREDUI_MAX_USERNAME_LENGTH + 1, Password,

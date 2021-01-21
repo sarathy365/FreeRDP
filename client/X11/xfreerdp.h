@@ -22,6 +22,10 @@
 #ifndef FREERDP_CLIENT_X11_FREERDP_H
 #define FREERDP_CLIENT_X11_FREERDP_H
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 typedef struct xf_context xfContext;
 
 #include <freerdp/api.h>
@@ -29,6 +33,10 @@ typedef struct xf_context xfContext;
 #include "xf_window.h"
 #include "xf_monitor.h"
 #include "xf_channels.h"
+
+#if defined(CHANNEL_TSMF_CLIENT)
+#include <freerdp/client/tsmf.h>
+#endif
 
 #include <freerdp/gdi/gdi.h>
 #include <freerdp/codec/rfx.h>
@@ -173,7 +181,9 @@ struct xf_context
 	XSetWindowAttributes attribs;
 	BOOL complex_regions;
 	VIRTUAL_SCREEN vscreen;
+#if defined(CHANNEL_TSMF_CLIENT)
 	void* xv_context;
+#endif
 
 	Atom* supportedAtoms;
 	unsigned long supportedAtomCount;
@@ -216,7 +226,10 @@ struct xf_context
 	Atom WM_DELETE_WINDOW;
 
 	/* Channels */
+#if defined(CHANNEL_TSMF_CLIENT)
 	TsmfClientContext* tsmf;
+#endif
+
 	xfClipboard* clipboard;
 	CliprdrClientContext* cliprdr;
 	xfVideoContext* xfVideo;
@@ -234,6 +247,7 @@ struct xf_context
 	/* value to be sent over wire for each logical client mouse button */
 	button_map button_map[NUM_BUTTONS_MAPPED];
 	BYTE savedMaximizedState;
+	UINT32 locked;
 };
 
 BOOL xf_create_window(xfContext* xfc);
@@ -286,11 +300,18 @@ enum XF_EXIT_CODE
 	XF_EXIT_UNKNOWN = 255,
 };
 
-void xf_lock_x11(xfContext* xfc, BOOL display);
-void xf_unlock_x11(xfContext* xfc, BOOL display);
+#define xf_lock_x11(xfc) xf_lock_x11_(xfc, __FUNCTION__);
+#define xf_unlock_x11(xfc) xf_unlock_x11_(xfc, __FUNCTION__);
+
+void xf_lock_x11_(xfContext* xfc, const char* fkt);
+void xf_unlock_x11_(xfContext* xfc, const char* fkt);
 
 BOOL xf_picture_transform_required(xfContext* xfc);
-void xf_draw_screen(xfContext* xfc, int x, int y, int w, int h);
+
+#define xf_draw_screen(_xfc, _x, _y, _w, _h) \
+	xf_draw_screen_((_xfc), (_x), (_y), (_w), (_h), __FUNCTION__, __FILE__, __LINE__)
+void xf_draw_screen_(xfContext* xfc, int x, int y, int w, int h, const char* fkt, const char* file,
+                     int line);
 
 FREERDP_API DWORD xf_exit_code_from_disconnect_reason(DWORD reason);
 

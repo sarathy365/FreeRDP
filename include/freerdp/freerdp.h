@@ -54,6 +54,7 @@ typedef RDP_CLIENT_ENTRY_POINTS_V1 RDP_CLIENT_ENTRY_POINTS;
 #include <freerdp/update.h>
 #include <freerdp/message.h>
 #include <freerdp/autodetect.h>
+#include <freerdp/heartbeat.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -67,6 +68,7 @@ extern "C"
 #define VERIFY_CERT_FLAG_GATEWAY 0x20
 #define VERIFY_CERT_FLAG_CHANGED 0x40
 #define VERIFY_CERT_FLAG_MISMATCH 0x80
+#define VERIFY_CERT_FLAG_MATCH_LEGACY_SHA1 0x100
 
 	typedef BOOL (*pContextNew)(freerdp* instance, rdpContext* context);
 	typedef void (*pContextFree)(freerdp* instance, rdpContext* context);
@@ -176,9 +178,10 @@ extern "C"
 
 	typedef int (*pLogonErrorInfo)(freerdp* instance, UINT32 data, UINT32 type);
 
-	typedef int (*pSendChannelData)(freerdp* instance, UINT16 channelId, BYTE* data, int size);
-	typedef int (*pReceiveChannelData)(freerdp* instance, UINT16 channelId, BYTE* data, int size,
-	                                   int flags, int totalSize);
+	typedef BOOL (*pSendChannelData)(freerdp* instance, UINT16 channelId, const BYTE* data,
+	                                 size_t size);
+	typedef BOOL (*pReceiveChannelData)(freerdp* instance, UINT16 channelId, const BYTE* data,
+	                                    size_t size, UINT32 flags, size_t totalSize);
 
 	typedef BOOL (*pPresentGatewayMessage)(freerdp* instance, UINT32 type, BOOL isDisplayMandatory,
 	                                       BOOL isConsentMandatory, size_t length,
@@ -307,7 +310,9 @@ extern "C"
 		ALIGN64 rdpAutoDetect* autodetect; /* (offset 19)
 		                                Auto-Detect handle for the connection.
 		                                Will be initialized by a call to freerdp_context_new() */
-		UINT64 paddingB[32 - 20];          /* 20 */
+		ALIGN64 rdpHeartbeat* heartbeat;   /* (offset 21) */
+
+		UINT64 paddingB[32 - 21]; /* 21 */
 
 		ALIGN64 size_t
 		    ContextSize; /* (offset 32)

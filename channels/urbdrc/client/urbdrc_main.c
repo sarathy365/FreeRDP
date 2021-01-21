@@ -40,7 +40,7 @@
 #include "urbdrc_types.h"
 #include "urbdrc_main.h"
 #include "data_transfer.h"
-#include "searchman.h"
+
 #include <urbdrc_helpers.h>
 
 static BOOL Stream_Write_UTF16_String_From_Utf8(wStream* s, const char* utf8, size_t len)
@@ -86,7 +86,7 @@ static IWTSVirtualChannel* get_channel(IUDEVMAN* idevman)
 static int func_container_id_generate(IUDEVICE* pdev, char* strContainerId)
 {
 	char *p, *path;
-	UINT8 containerId[17];
+	UINT8 containerId[17] = { 0 };
 	UINT16 idVendor, idProduct;
 	idVendor = (UINT16)pdev->query_device_descriptor(pdev, ID_VENDOR);
 	idProduct = (UINT16)pdev->query_device_descriptor(pdev, ID_PRODUCT);
@@ -97,7 +97,6 @@ static int func_container_id_generate(IUDEVICE* pdev, char* strContainerId)
 	else
 		p = path;
 
-	ZeroMemory(containerId, sizeof(containerId));
 	sprintf_s((char*)containerId, sizeof(containerId), "%04" PRIX16 "%04" PRIX16 "%s", idVendor,
 	          idProduct, p);
 	/* format */
@@ -114,7 +113,7 @@ static int func_container_id_generate(IUDEVICE* pdev, char* strContainerId)
 
 static int func_instance_id_generate(IUDEVICE* pdev, char* strInstanceId, size_t len)
 {
-	char instanceId[17];
+	char instanceId[17] = { 0 };
 	sprintf_s(instanceId, sizeof(instanceId), "\\%s", pdev->getPath(pdev));
 	/* format */
 	sprintf_s(strInstanceId, len,
@@ -265,7 +264,8 @@ static UINT urdbrc_send_usb_device_add(URBDRC_CHANNEL_CALLBACK* callback, IUDEVI
 		const UINT16 bcdDevice = (UINT16)pdev->query_device_descriptor(pdev, BCD_DEVICE);
 		sprintf_s(HardwareIds[1], DEVICE_HARDWARE_ID_SIZE,
 		          "USB\\VID_%04" PRIX16 "&PID_%04" PRIX16 "", idVendor, idProduct);
-		sprintf_s(HardwareIds[0], DEVICE_HARDWARE_ID_SIZE, "%s&REV_%04" PRIX16 "", HardwareIds[1],
+		sprintf_s(HardwareIds[0], DEVICE_HARDWARE_ID_SIZE,
+		          "USB\\VID_%04" PRIX16 "&PID_%04" PRIX16 "&REV_%04" PRIX16 "", idVendor, idProduct,
 		          bcdDevice);
 	}
 	{
@@ -277,18 +277,20 @@ static UINT urdbrc_send_usb_device_add(URBDRC_CHANNEL_CALLBACK* callback, IUDEVI
 		{
 			sprintf_s(CompatibilityIds[2], DEVICE_COMPATIBILITY_ID_SIZE, "USB\\Class_%02" PRIX8 "",
 			          bDeviceClass);
-			sprintf_s(CompatibilityIds[1], DEVICE_COMPATIBILITY_ID_SIZE, "%s&SubClass_%02" PRIX8 "",
-			          CompatibilityIds[2], bDeviceSubClass);
-			sprintf_s(CompatibilityIds[0], DEVICE_COMPATIBILITY_ID_SIZE, "%s&Prot_%02" PRIX8 "",
-			          CompatibilityIds[1], bDeviceProtocol);
+			sprintf_s(CompatibilityIds[1], DEVICE_COMPATIBILITY_ID_SIZE,
+			          "USB\\Class_%02" PRIX8 "&SubClass_%02" PRIX8 "", bDeviceClass,
+			          bDeviceSubClass);
+			sprintf_s(CompatibilityIds[0], DEVICE_COMPATIBILITY_ID_SIZE,
+			          "USB\\Class_%02" PRIX8 "&SubClass_%02" PRIX8 "&Prot_%02" PRIX8 "",
+			          bDeviceClass, bDeviceSubClass, bDeviceProtocol);
 		}
 		else
 		{
 			sprintf_s(CompatibilityIds[2], DEVICE_COMPATIBILITY_ID_SIZE, "USB\\DevClass_00");
-			sprintf_s(CompatibilityIds[1], DEVICE_COMPATIBILITY_ID_SIZE, "%s&SubClass_00",
-			          CompatibilityIds[2]);
-			sprintf_s(CompatibilityIds[0], DEVICE_COMPATIBILITY_ID_SIZE, "%s&Prot_00",
-			          CompatibilityIds[1]);
+			sprintf_s(CompatibilityIds[1], DEVICE_COMPATIBILITY_ID_SIZE,
+			          "USB\\DevClass_00&SubClass_00");
+			sprintf_s(CompatibilityIds[0], DEVICE_COMPATIBILITY_ID_SIZE,
+			          "USB\\DevClass_00&SubClass_00&Prot_00");
 		}
 	}
 	func_instance_id_generate(pdev, strInstanceId, DEVICE_INSTANCE_STR_SIZE);
@@ -408,13 +410,39 @@ static UINT urbdrc_exchange_capabilities(URBDRC_CHANNEL_CALLBACK* callback, wStr
 	return error;
 }
 
+static BOOL urbdrc_announce_devices(IUDEVMAN* udevman)
+{
+	UINT error = ERROR_SUCCESS;
+
+	udevman->loading_lock(udevman);
+	udevman->rewind(udevman);
+
+	while (udevman->has_next(udevman))
+	{
+		IUDEVICE* pdev = udevman->get_next(udevman);
+
+		if (!pdev->isAlreadySend(pdev))
+		{
+			const UINT32 deviceId = pdev->get_UsbDevice(pdev);
+			UINT error =
+			    urdbrc_send_virtual_channel_add(udevman->plugin, get_channel(udevman), deviceId);
+
+			if (error != ERROR_SUCCESS)
+				break;
+		}
+	}
+
+	udevman->loading_unlock(udevman);
+
+	return error == ERROR_SUCCESS;
+}
+
 static UINT urbdrc_device_control_channel(URBDRC_CHANNEL_CALLBACK* callback, wStream* s)
 {
 	URBDRC_PLUGIN* urbdrc = (URBDRC_PLUGIN*)callback->plugin;
 	IUDEVMAN* udevman = urbdrc->udevman;
 	IWTSVirtualChannel* channel = callback->channel;
 	IUDEVICE* pdev = NULL;
-	UINT32 i = 0;
 	BOOL found = FALSE;
 	UINT error = ERROR_INTERNAL_ERROR;
 	UINT32 channelId = callback->channel_mgr->GetChannelId(channel);
@@ -426,13 +454,8 @@ static UINT urbdrc_device_control_channel(URBDRC_CHANNEL_CALLBACK* callback, wSt
 			error = ERROR_SUCCESS;
 			udevman->initialize(udevman, channelId);
 
-			for (i = 0; i < udevman->get_device_num(udevman); i++)
-			{
-				error = urdbrc_send_virtual_channel_add(callback->plugin, callback->channel, i);
-
-				if (error != ERROR_SUCCESS)
-					goto fail;
-			}
+			if (!urbdrc_announce_devices(udevman))
+				goto fail;
 
 			urbdrc->vchannel_status = INIT_CHANNEL_OUT;
 			break;
@@ -591,7 +614,15 @@ static UINT urbdrc_on_close(IWTSVirtualChannelCallback* pChannelCallback)
 	{
 		URBDRC_PLUGIN* urbdrc = (URBDRC_PLUGIN*)callback->plugin;
 		if (urbdrc)
-			urbdrc->status |= URBDRC_DEVICE_CHANNEL_CLOSED;
+		{
+			IUDEVMAN* udevman = urbdrc->udevman;
+			if (udevman && callback->channel_mgr)
+			{
+				UINT32 control = callback->channel_mgr->GetChannelId(callback->channel);
+				if (udevman->controlChannelId == control)
+					udevman->status |= URBDRC_DEVICE_CHANNEL_CLOSED;
+			}
+		}
 	}
 	free(callback);
 	return CHANNEL_RC_OK;
@@ -634,14 +665,15 @@ static UINT urbdrc_on_new_channel_connection(IWTSListenerCallback* pListenerCall
  */
 static UINT urbdrc_plugin_initialize(IWTSPlugin* pPlugin, IWTSVirtualChannelManager* pChannelMgr)
 {
+	UINT status;
 	URBDRC_PLUGIN* urbdrc = (URBDRC_PLUGIN*)pPlugin;
-	IUDEVMAN* udevman = NULL;
-	USB_SEARCHMAN* searchman = NULL;
+	IUDEVMAN* udevman;
 	char channelName[sizeof(URBDRC_CHANNEL_NAME)] = { URBDRC_CHANNEL_NAME };
 
-	if (!urbdrc)
+	if (!urbdrc || !urbdrc->udevman)
 		return ERROR_INVALID_PARAMETER;
 
+	udevman = urbdrc->udevman;
 	urbdrc->listener_callback =
 	    (URBDRC_LISTENER_CALLBACK*)calloc(1, sizeof(URBDRC_LISTENER_CALLBACK));
 
@@ -651,22 +683,18 @@ static UINT urbdrc_plugin_initialize(IWTSPlugin* pPlugin, IWTSVirtualChannelMana
 	urbdrc->listener_callback->iface.OnNewChannelConnection = urbdrc_on_new_channel_connection;
 	urbdrc->listener_callback->plugin = pPlugin;
 	urbdrc->listener_callback->channel_mgr = pChannelMgr;
-	/* Init searchman */
-	udevman = urbdrc->udevman;
-	searchman = searchman_new((void*)urbdrc, udevman->get_defUsbDevice(udevman));
 
-	if (!searchman)
-	{
-		free(urbdrc->listener_callback);
-		urbdrc->listener_callback = NULL;
-		return CHANNEL_RC_NO_MEMORY;
-	}
-
-	urbdrc->searchman = searchman;
 	/* [MS-RDPEUSB] 2.1 Transport defines the channel name in uppercase letters */
 	CharUpperA(channelName);
-	return pChannelMgr->CreateListener(pChannelMgr, channelName, 0,
-	                                   &urbdrc->listener_callback->iface, NULL);
+	status = pChannelMgr->CreateListener(pChannelMgr, channelName, 0,
+	                                     &urbdrc->listener_callback->iface, &urbdrc->listener);
+	if (status != CHANNEL_RC_OK)
+		return status;
+
+	if (udevman->listener_created_callback)
+		return udevman->listener_created_callback(udevman);
+
+	return CHANNEL_RC_OK;
 }
 
 /**
@@ -678,20 +706,16 @@ static UINT urbdrc_plugin_terminated(IWTSPlugin* pPlugin)
 {
 	URBDRC_PLUGIN* urbdrc = (URBDRC_PLUGIN*)pPlugin;
 	IUDEVMAN* udevman;
-	USB_SEARCHMAN* searchman;
 
 	if (!urbdrc)
 		return ERROR_INVALID_DATA;
-
-	udevman = urbdrc->udevman;
-	searchman = urbdrc->searchman;
-
-	if (searchman)
+	if (urbdrc->listener_callback)
 	{
-		/* close searchman */
-		searchman->free(searchman);
-		searchman = NULL;
+		IWTSVirtualChannelManager* mgr = urbdrc->listener_callback->channel_mgr;
+		if (mgr)
+			IFCALL(mgr->DestroyListener, mgr, urbdrc->listener);
 	}
+	udevman = urbdrc->udevman;
 
 	if (udevman)
 	{
@@ -804,13 +828,12 @@ static UINT urbdrc_process_addin_args(URBDRC_PLUGIN* urbdrc, const ADDIN_ARGV* a
 	return CHANNEL_RC_OK;
 }
 
-BOOL add_device(IUDEVMAN* idevman, BYTE busnum, BYTE devnum, UINT16 idVendor, UINT16 idProduct)
+BOOL add_device(IUDEVMAN* idevman, UINT32 flags, BYTE busnum, BYTE devnum, UINT16 idVendor,
+                UINT16 idProduct)
 {
-	USB_SEARCHDEV* sdev = NULL;
 	size_t success = 0;
-	BOOL found = FALSE;
 	URBDRC_PLUGIN* urbdrc;
-	USB_SEARCHMAN* searchman;
+	UINT32 mask, regflags = 0;
 
 	if (!idevman)
 		return FALSE;
@@ -820,58 +843,29 @@ BOOL add_device(IUDEVMAN* idevman, BYTE busnum, BYTE devnum, UINT16 idVendor, UI
 	if (!urbdrc || !urbdrc->listener_callback)
 		return FALSE;
 
-	searchman = urbdrc->searchman;
+	mask = (DEVICE_ADD_FLAG_VENDOR | DEVICE_ADD_FLAG_PRODUCT);
+	if ((flags & mask) == mask)
+		regflags |= UDEVMAN_FLAG_ADD_BY_VID_PID;
+	mask = (DEVICE_ADD_FLAG_BUS | DEVICE_ADD_FLAG_DEV);
+	if ((flags & mask) == mask)
+		regflags |= UDEVMAN_FLAG_ADD_BY_ADDR;
 
-	if (!searchman)
-		return FALSE;
+	success = idevman->register_udevice(idevman, busnum, devnum, idVendor, idProduct, regflags);
 
-	searchman->rewind(searchman);
-
-	while (searchman->has_next(searchman))
+	if ((success > 0) && (flags & DEVICE_ADD_FLAG_REGISTER))
 	{
-		USB_SEARCHDEV* dev = searchman->get_next(searchman);
-
-		if (dev->idVendor == idVendor && dev->idProduct == idProduct)
-		{
-			WLog_Print(urbdrc->log, WLOG_TRACE,
-			           "Searchman Find Device: %04" PRIx16 ":%04" PRIx16 "", dev->idVendor,
-			           dev->idProduct);
-			found = TRUE;
-			sdev = dev;
-			break;
-		}
-	}
-
-	if (!found && idevman->isAutoAdd(idevman))
-	{
-		WLog_Print(urbdrc->log, WLOG_TRACE, "Auto Find Device: %04x:%04x ", idVendor, idProduct);
-		found = TRUE;
-	}
-
-	if (found)
-	{
-		success = idevman->register_udevice(idevman, busnum, devnum, searchman->UsbDevice, 0, 0,
-		                                    UDEVMAN_FLAG_ADD_BY_ADDR);
-	}
-
-	if (success)
-	{
-		searchman->UsbDevice++;
-		urdbrc_send_virtual_channel_add(idevman->plugin, get_channel(idevman),
-		                                5 + searchman->UsbDevice);
-
-		if (found && sdev)
-			searchman->remove(searchman, sdev->idVendor, sdev->idProduct);
+		if (!urbdrc_announce_devices(idevman))
+			return FALSE;
 	}
 
 	return TRUE;
 }
 
-BOOL del_device(IUDEVMAN* idevman, BYTE busnum, BYTE devnum, UINT16 idVendor, UINT16 idProduct)
+BOOL del_device(IUDEVMAN* idevman, UINT32 flags, BYTE busnum, BYTE devnum, UINT16 idVendor,
+                UINT16 idProduct)
 {
 	IUDEVICE* pdev = NULL;
 	URBDRC_PLUGIN* urbdrc;
-	USB_SEARCHMAN* searchman;
 
 	if (!idevman)
 		return FALSE;
@@ -879,11 +873,6 @@ BOOL del_device(IUDEVMAN* idevman, BYTE busnum, BYTE devnum, UINT16 idVendor, UI
 	urbdrc = (URBDRC_PLUGIN*)idevman->plugin;
 
 	if (!urbdrc || !urbdrc->listener_callback)
-		return FALSE;
-
-	searchman = urbdrc->searchman;
-
-	if (!searchman)
 		return FALSE;
 
 	idevman->loading_lock(idevman);
@@ -891,9 +880,36 @@ BOOL del_device(IUDEVMAN* idevman, BYTE busnum, BYTE devnum, UINT16 idVendor, UI
 
 	while (idevman->has_next(idevman))
 	{
+		BOOL match = TRUE;
 		IUDEVICE* dev = idevman->get_next(idevman);
 
-		if (dev->get_bus_number(dev) == busnum && dev->get_dev_number(dev) == devnum)
+		if ((flags & (DEVICE_ADD_FLAG_BUS | DEVICE_ADD_FLAG_DEV | DEVICE_ADD_FLAG_VENDOR |
+		              DEVICE_ADD_FLAG_PRODUCT)) == 0)
+			match = FALSE;
+		if (flags & DEVICE_ADD_FLAG_BUS)
+		{
+			if (dev->get_bus_number(dev) != busnum)
+				match = FALSE;
+		}
+		if (flags & DEVICE_ADD_FLAG_DEV)
+		{
+			if (dev->get_dev_number(dev) != devnum)
+				match = FALSE;
+		}
+		if (flags & DEVICE_ADD_FLAG_VENDOR)
+		{
+			int vid = dev->query_device_descriptor(dev, ID_VENDOR);
+			if (vid != idVendor)
+				match = FALSE;
+		}
+		if (flags & DEVICE_ADD_FLAG_PRODUCT)
+		{
+			int pid = dev->query_device_descriptor(dev, ID_PRODUCT);
+			if (pid != idProduct)
+				match = FALSE;
+		}
+
+		if (match)
 		{
 			pdev = dev;
 			break;

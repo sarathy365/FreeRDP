@@ -42,10 +42,9 @@ static INLINE BYTE* freerdp_bitmap_planar_delta_encode_plane(const BYTE* inPlane
 static INLINE INT32 planar_skip_plane_rle(const BYTE* pSrcData, UINT32 SrcSize, UINT32 nWidth,
                                           UINT32 nHeight)
 {
+	UINT32 used = 0;
 	UINT32 x, y;
 	BYTE controlByte;
-	const BYTE* pRLE = pSrcData;
-	const BYTE* pEnd = &pSrcData[SrcSize];
 
 	for (y = 0; y < nHeight; y++)
 	{
@@ -54,10 +53,10 @@ static INLINE INT32 planar_skip_plane_rle(const BYTE* pSrcData, UINT32 SrcSize, 
 			int cRawBytes;
 			int nRunLength;
 
-			if (pRLE >= pEnd)
+			if (used >= SrcSize)
 				return -1;
 
-			controlByte = *pRLE++;
+			controlByte = pSrcData[used++];
 			nRunLength = PLANAR_CONTROL_BYTE_RUN_LENGTH(controlByte);
 			cRawBytes = PLANAR_CONTROL_BYTE_RAW_BYTES(controlByte);
 
@@ -72,19 +71,21 @@ static INLINE INT32 planar_skip_plane_rle(const BYTE* pSrcData, UINT32 SrcSize, 
 				cRawBytes = 0;
 			}
 
-			pRLE += cRawBytes;
+			used += cRawBytes;
 			x += cRawBytes;
 			x += nRunLength;
 
 			if (x > nWidth)
 				return -1;
 
-			if (pRLE > pEnd)
+			if (used > SrcSize)
 				return -1;
 		}
 	}
 
-	return (INT32)(pRLE - pSrcData);
+	if (used > INT32_MAX)
+		return -1;
+	return (INT32)used;
 }
 
 static INLINE INT32 planar_decompress_plane_rle_only(const BYTE* pSrcData, UINT32 SrcSize,
@@ -105,7 +106,7 @@ static INLINE INT32 planar_decompress_plane_rle_only(const BYTE* pSrcData, UINT3
 
 	previousScanline = NULL;
 
-	for (y = 0; y < nHeight; y++)
+	for (y = 0; y < (INT32)nHeight; y++)
 	{
 		BYTE* dstp = &pDstData[((y) * (INT32)nWidth)];
 		pixel = 0;
@@ -1169,7 +1170,6 @@ BYTE* freerdp_bitmap_planar_delta_encode_plane(const BYTE* inPlane, UINT32 width
                                                BYTE* outPlane)
 {
 	char s2c;
-	INT32 delta;
 	UINT32 y, x;
 	BYTE* outPtr;
 	const BYTE *srcPtr, *prevLinePtr;
@@ -1193,9 +1193,9 @@ BYTE* freerdp_bitmap_planar_delta_encode_plane(const BYTE* inPlane, UINT32 width
 	{
 		for (x = 0; x < width; x++, outPtr++, srcPtr++, prevLinePtr++)
 		{
-			delta = *srcPtr - *prevLinePtr;
+			INT32 delta = *srcPtr - *prevLinePtr;
 			s2c = (delta >= 0) ? (char)delta : (char)(~((BYTE)(-delta)) + 1);
-			s2c = (s2c >= 0) ? (s2c << 1) : (char)(((~((BYTE)s2c) + 1) << 1) - 1);
+			s2c = (s2c >= 0) ? ((UINT32)s2c << 1) : (char)(((UINT32)(~((BYTE)s2c) + 1) << 1) - 1);
 			*outPtr = (BYTE)s2c;
 		}
 	}

@@ -32,7 +32,8 @@ macro(define_channel_options)
 	string(TOUPPER "CHANNEL_${CHANNEL_NAME}" CHANNEL_OPTION)
 	string(TOUPPER "CHANNEL_${CHANNEL_NAME}_CLIENT" CHANNEL_CLIENT_OPTION)
 	string(TOUPPER "CHANNEL_${CHANNEL_NAME}_SERVER" CHANNEL_SERVER_OPTION)
-	
+	string(TOUPPER "${CHANNEL_TYPE}" CHANNEL_TYPE)
+
 	if(${${CHANNEL_CLIENT_OPTION}})
 		set(OPTION_CLIENT_DEFAULT ${${CHANNEL_CLIENT_OPTION}})
 	endif()
@@ -52,23 +53,30 @@ macro(define_channel_options)
 	set(CHANNEL_DEFAULT ${OPTION_DEFAULT})
 		
 	set(CHANNEL_OPTION_DOC "Build ${CHANNEL_NAME} ${CHANNEL_TYPE} channel")
-	option(${CHANNEL_OPTION} "${CHANNEL_OPTION_DOC}" ${CHANNEL_DEFAULT})
+
+	if ("${CHANNEL_TYPE}" STREQUAL "DYNAMIC")
+		CMAKE_DEPENDENT_OPTION(${CHANNEL_OPTION} "${CHANNEL_OPTION_DOC}" ${CHANNEL_DEFAULT} "CHANNEL_DRDYNVC" OFF)
+	else()
+		option(${CHANNEL_OPTION} "${CHANNEL_OPTION_DOC}" ${CHANNEL_DEFAULT})
+	endif()
 
 endmacro(define_channel_options)
 
 macro(define_channel_client_options _channel_client_default)
 	string(TOUPPER "CHANNEL_${CHANNEL_NAME}_CLIENT" CHANNEL_CLIENT_OPTION)
+	string(TOUPPER "CHANNEL_${CHANNEL_NAME}" CHANNEL_OPTION)
 	set(CHANNEL_CLIENT_OPTION_DOC "Build ${CHANNEL_NAME} ${CHANNEL_TYPE} channel client")
-	option(${CHANNEL_CLIENT_OPTION} "${CHANNEL_CLIENT_OPTION_DOC}" ${_channel_client_default})
-	cmake_dependent_option(${CHANNEL_CLIENT_OPTION} "${CHANNEL_CLIENT_OPTION_DOC}"
+
+	CMAKE_DEPENDENT_OPTION(${CHANNEL_CLIENT_OPTION} "${CHANNEL_CLIENT_OPTION_DOC}"
 		${_channel_client_default} "${CHANNEL_OPTION}" OFF)
 endmacro(define_channel_client_options)
 
 macro(define_channel_server_options _channel_server_default)
 	string(TOUPPER "CHANNEL_${CHANNEL_NAME}_SERVER" CHANNEL_SERVER_OPTION)
+	string(TOUPPER "CHANNEL_${CHANNEL_NAME}" CHANNEL_OPTION)
 	set(CHANNEL_SERVER_OPTION_DOC "Build ${CHANNEL_NAME} ${CHANNEL_TYPE} channel server")
-	option(${CHANNEL_SERVER_OPTION} "${CHANNEL_SERVER_OPTION_DOC}" ${_channel_server_default})
-	cmake_dependent_option(${CHANNEL_SERVER_OPTION} "${CHANNEL_SERVER_OPTION_DOC}"
+
+	CMAKE_DEPENDENT_OPTION(${CHANNEL_SERVER_OPTION} "${CHANNEL_SERVER_OPTION_DOC}"
 		${_channel_server_default} "${CHANNEL_OPTION}" OFF)
 endmacro(define_channel_server_options)
 
@@ -167,7 +175,12 @@ macro(client_channel_install _targets _destination)
 endmacro(client_channel_install)
 
 macro(add_channel_client_library _module_prefix _module_name _channel_name _dynamic _entry)
-	if(${_dynamic} AND (NOT BUILTIN_CHANNELS))
+  set(_lnk_dir ${${_module_prefix}_LINK_DIRS})
+  if (NOT "${_lnk_dir}" STREQUAL "")
+    link_directories(${_lnk_dir})
+  endif()
+
+  if(${_dynamic} AND (NOT BUILTIN_CHANNELS))
 # On windows create dll version information.
 # Vendor, product and year are already set in top level CMakeLists.txt
     if (WIN32)
@@ -185,22 +198,30 @@ macro(add_channel_client_library _module_prefix _module_name _channel_name _dyna
       set ( ${_module_prefix}_SRCS ${${_module_prefix}_SRCS} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
     endif()
 
-		add_library(${_module_name} ${${_module_prefix}_SRCS})
-		client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
-	else()
-		set(${_module_prefix}_STATIC ON PARENT_SCOPE)
-		set(${_module_prefix}_NAME ${_module_name} PARENT_SCOPE)
-		set(${_module_prefix}_CHANNEL ${_channel_name} PARENT_SCOPE)
-		set(${_module_prefix}_ENTRY ${_entry} PARENT_SCOPE)
-		add_library(${_module_name} STATIC ${${_module_prefix}_SRCS})
-		if (${CMAKE_VERSION} VERSION_LESS 2.8.12 OR NOT BUILD_SHARED_LIBS)
-			client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
-		endif()
-	endif()
+    add_library(${_module_name} ${${_module_prefix}_SRCS})
+    target_link_libraries(${_module_name} ${${_module_prefix}_LIBS})
+    client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
+  else()
+    set(${_module_prefix}_STATIC ON PARENT_SCOPE)
+    set(${_module_prefix}_NAME ${_module_name} PARENT_SCOPE)
+    set(${_module_prefix}_CHANNEL ${_channel_name} PARENT_SCOPE)
+    set(${_module_prefix}_ENTRY ${_entry} PARENT_SCOPE)
+    add_library(${_module_name} STATIC ${${_module_prefix}_SRCS})
+    target_link_libraries(${_module_name} ${${_module_prefix}_LIBS})
+
+    if (${CMAKE_VERSION} VERSION_LESS 2.8.12 OR NOT BUILD_SHARED_LIBS)
+      client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
+    endif()
+  endif()
 endmacro(add_channel_client_library)
 
 macro(add_channel_client_subsystem_library _module_prefix _module_name _channel_name _type _dynamic _entry)
-	if(${_dynamic} AND (NOT BUILTIN_CHANNELS))
+  set(_lnk_dir ${${_module_prefix}_LINK_DIRS})
+  if (NOT "${_lnk_dir}" STREQUAL "")
+    link_directories(${_lnk_dir})
+  endif()
+
+  if(${_dynamic} AND (NOT BUILTIN_CHANNELS))
 # On windows create dll version information.
 # Vendor, product and year are already set in top level CMakeLists.txt
     if (WIN32)
@@ -218,21 +239,29 @@ macro(add_channel_client_subsystem_library _module_prefix _module_name _channel_
       set ( ${_module_prefix}_SRCS ${${_module_prefix}_SRCS} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
     endif()
 
-		add_library(${_module_name} ${${_module_prefix}_SRCS})
-		client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
-	else()
-		set(${_module_prefix}_STATIC ON PARENT_SCOPE)
-		set(${_module_prefix}_NAME ${_module_name} PARENT_SCOPE)
-		set(${_module_prefix}_TYPE ${_type} PARENT_SCOPE)
-		add_library(${_module_name} STATIC ${${_module_prefix}_SRCS})
-		if (${CMAKE_VERSION} VERSION_LESS 2.8.12 OR NOT BUILD_SHARED_LIBS)
-			client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
-		endif()
-	endif()
+    add_library(${_module_name} ${${_module_prefix}_SRCS})
+    target_link_libraries(${_module_name} ${${_module_prefix}_LIBS})
+    client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
+  else()
+    set(${_module_prefix}_STATIC ON PARENT_SCOPE)
+    set(${_module_prefix}_NAME ${_module_name} PARENT_SCOPE)
+    set(${_module_prefix}_TYPE ${_type} PARENT_SCOPE)
+
+    add_library(${_module_name} STATIC ${${_module_prefix}_SRCS})
+    target_link_libraries(${_module_name} ${${_module_prefix}_LIBS})
+    if (${CMAKE_VERSION} VERSION_LESS 2.8.12 OR NOT BUILD_SHARED_LIBS)
+      client_channel_install(${_module_name}  ${FREERDP_ADDIN_PATH})
+    endif()
+  endif()
 endmacro(add_channel_client_subsystem_library)
 
 macro(add_channel_server_library _module_prefix _module_name _channel_name _dynamic _entry)
-	if(${_dynamic} AND (NOT BUILTIN_CHANNELS))
+  set(_lnk_dir ${${_module_prefix}_LINK_DIRS})
+  if (NOT "${_lnk_dir}" STREQUAL "")
+    link_directories(${_lnk_dir})
+  endif()
+
+  if(${_dynamic} AND (NOT BUILTIN_CHANNELS))
 # On windows create dll version information.
 # Vendor, product and year are already set in top level CMakeLists.txt
     if (WIN32)
@@ -265,6 +294,23 @@ endmacro(add_channel_server_library)
 
 set(FILENAME "ChannelOptions.cmake")
 file(GLOB FILEPATHS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*/${FILENAME}")
+
+# We need special treatement for drdynvc:
+# It needs to be the first entry so that every
+# dynamic channel has the dependent options available.
+set(DRDYNVC_MATCH "")
+
+foreach(FILEPATH ${FILEPATHS})
+	if(${FILEPATH} MATCHES "^([^/]*)drdynvc/+${FILENAME}")
+		set(DRDYNVC_MATCH ${FILEPATH})
+	endif()
+endforeach()
+
+if (NOT "${DRDYNVC_MATCH}" STREQUAL "")
+	list(REMOVE_ITEM FILEPATHS ${DRDYNVC_MATCH})
+	list(APPEND FILEPATHS ${DRDYNVC_MATCH})
+	list(REVERSE FILEPATHS) # list PREPEND is not available on old CMake3
+endif()
 
 foreach(FILEPATH ${FILEPATHS})
 	if(${FILEPATH} MATCHES "^([^/]*)/+${FILENAME}")

@@ -304,7 +304,8 @@ static wStream* rdg_receive_packet(rdpRdg* rdg)
 	Stream_Seek(s, 4);
 	Stream_Read_UINT32(s, packetLength);
 
-	if ((packetLength > INT_MAX) || !Stream_EnsureCapacity(s, packetLength))
+	if ((packetLength > INT_MAX) || !Stream_EnsureCapacity(s, packetLength) ||
+	    (packetLength < header))
 	{
 		Stream_Free(s, TRUE);
 		return NULL;
@@ -868,6 +869,9 @@ static BOOL rdg_get_gateway_credentials(rdpContext* context)
 	if (!settings->GatewayPassword || !settings->GatewayUsername ||
 	    !strlen(settings->GatewayPassword) || !strlen(settings->GatewayUsername))
 	{
+		if (freerdp_shall_disconnect(instance))
+			return FALSE;
+
 		if (!instance->GatewayAuthenticate)
 		{
 			freerdp_set_last_error_log(context, FREERDP_ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS);
@@ -1163,7 +1167,7 @@ static BOOL rdg_tunnel_connect(rdpRdg* rdg)
 	return TRUE;
 }
 
-BOOL rdg_connect(rdpRdg* rdg, int timeout, BOOL* rpcFallback)
+BOOL rdg_connect(rdpRdg* rdg, DWORD timeout, BOOL* rpcFallback)
 {
 	BOOL status;
 	SOCKET outConnSocket = 0;

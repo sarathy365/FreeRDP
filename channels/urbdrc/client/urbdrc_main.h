@@ -24,8 +24,6 @@
 #include <winpr/pool.h>
 #include <freerdp/channels/log.h>
 
-#include "searchman.h"
-
 #define DEVICE_HARDWARE_ID_SIZE 32
 #define DEVICE_COMPATIBILITY_ID_SIZE 36
 #define DEVICE_INSTANCE_STR_SIZE 37
@@ -82,12 +80,11 @@ struct _URBDRC_PLUGIN
 	URBDRC_LISTENER_CALLBACK* listener_callback;
 
 	IUDEVMAN* udevman;
-	USB_SEARCHMAN* searchman;
 	UINT32 vchannel_status;
 	char* subsystem;
 
-	UINT32 status;
 	wLog* log;
+	IWTSListener* listener;
 };
 
 typedef BOOL (*PREGISTERURBDRCSERVICE)(IWTSPlugin* plugin, IUDEVMAN* udevman);
@@ -163,9 +160,6 @@ struct _IUDEVICE
 
 	BOOL (*attach_kernel_driver)(IUDEVICE* idev);
 
-	/* Wait for 5 sec */
-	BOOL (*wait_for_detach)(IUDEVICE* idev);
-
 	int (*query_device_port_status)(IUDEVICE* idev, UINT32* UsbdStatus, UINT32* BufferSize,
 	                                BYTE* Buffer);
 
@@ -207,30 +201,43 @@ struct _IUDEVMAN
 	void (*rewind)(IUDEVMAN* idevman);
 	BOOL (*has_next)(IUDEVMAN* idevman);
 	BOOL (*unregister_udevice)(IUDEVMAN* idevman, BYTE bus_number, BYTE dev_number);
-	size_t (*register_udevice)(IUDEVMAN* idevman, BYTE bus_number, BYTE dev_number,
-	                           UINT32 UsbDevice, UINT16 idVendor, UINT16 idProduct, int flag);
+	size_t (*register_udevice)(IUDEVMAN* idevman, BYTE bus_number, BYTE dev_number, UINT16 idVendor,
+	                           UINT16 idProduct, UINT32 flag);
 	IUDEVICE* (*get_next)(IUDEVMAN* idevman);
 	IUDEVICE* (*get_udevice_by_UsbDevice)(IUDEVMAN* idevman, UINT32 UsbDevice);
 
 	/* Extension */
-	int (*check_device_exist_by_id)(IUDEVMAN* idevman, UINT16 idVendor, UINT16 idProduct);
 	int (*isAutoAdd)(IUDEVMAN* idevman);
 
 	/* Basic state */
-	BASIC_DEVMAN_STATE_DEFINED(defUsbDevice, UINT32);
 	BASIC_DEVMAN_STATE_DEFINED(device_num, UINT32);
-	BASIC_DEVMAN_STATE_DEFINED(sem_timeout, int);
+	BASIC_DEVMAN_STATE_DEFINED(next_device_id, UINT32);
 
 	/* control semaphore or mutex lock */
 	void (*loading_lock)(IUDEVMAN* idevman);
 	void (*loading_unlock)(IUDEVMAN* idevman);
 	BOOL (*initialize)(IUDEVMAN* idevman, UINT32 channelId);
+	UINT (*listener_created_callback)(IUDEVMAN* idevman);
 
 	IWTSPlugin* plugin;
 	UINT32 controlChannelId;
+	UINT32 status;
 };
-BOOL add_device(IUDEVMAN* idevman, BYTE busnum, BYTE devnum, UINT16 idVendor, UINT16 idProduct);
-BOOL del_device(IUDEVMAN* idevman, BYTE busnum, BYTE devnum, UINT16 idVendor, UINT16 idProduct);
+
+#define DEVICE_ADD_FLAG_BUS 0x01
+#define DEVICE_ADD_FLAG_DEV 0x02
+#define DEVICE_ADD_FLAG_VENDOR 0x04
+#define DEVICE_ADD_FLAG_PRODUCT 0x08
+#define DEVICE_ADD_FLAG_REGISTER 0x10
+
+#define DEVICE_ADD_FLAG_ALL                                               \
+	(DEVICE_ADD_FLAG_BUS | DEVICE_ADD_FLAG_DEV | DEVICE_ADD_FLAG_VENDOR | \
+	 DEVICE_ADD_FLAG_PRODUCT | DEVICE_ADD_FLAG_REGISTER)
+
+FREERDP_API BOOL add_device(IUDEVMAN* idevman, UINT32 flags, BYTE busnum, BYTE devnum,
+                            UINT16 idVendor, UINT16 idProduct);
+FREERDP_API BOOL del_device(IUDEVMAN* idevman, UINT32 flags, BYTE busnum, BYTE devnum,
+                            UINT16 idVendor, UINT16 idProduct);
 
 UINT stream_write_and_free(IWTSPlugin* plugin, IWTSVirtualChannel* channel, wStream* s);
 

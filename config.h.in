@@ -24,9 +24,9 @@
 #cmakedefine HAVE_PTHREAD_MUTEX_TIMEDLOCK
 #cmakedefine HAVE_VALGRIND_MEMCHECK_H
 #cmakedefine HAVE_EXECINFO_H
+#cmakedefine HAVE_GETLOGIN_R
 
 /* Features */
-#cmakedefine HAVE_ALIGNED_REQUIRED
 #cmakedefine SWRESAMPLE_FOUND
 #cmakedefine AVRESAMPLE_FOUND
 
@@ -45,8 +45,6 @@
 #cmakedefine WITH_EVENTFD_READ_WRITE
 #cmakedefine HAVE_MATH_C99_LONG_DOUBLE
 
-#cmakedefine WITH_GSTREAMER_1_0
-#cmakedefine WITH_GSTREAMER_0_10
 #cmakedefine WITH_WINMM
 #cmakedefine WITH_MACAUDIO
 #cmakedefine WITH_OSS
@@ -162,6 +160,7 @@
 #cmakedefine WITH_DEBUG_RDPEI
 #cmakedefine WITH_DEBUG_TIMEZONE
 #cmakedefine WITH_DEBUG_THREADS
+#cmakedefine WITH_DEBUG_URBDRC
 #cmakedefine WITH_DEBUG_MUTEX
 #cmakedefine WITH_DEBUG_TRANSPORT
 #cmakedefine WITH_DEBUG_WND

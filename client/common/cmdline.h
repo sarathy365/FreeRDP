@@ -24,6 +24,10 @@
 #ifndef CLIENT_COMMON_CMDLINE_H
 #define CLIENT_COMMON_CMDLINE_H
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <winpr/cmdline.h>
 
 static const COMMAND_LINE_ARGUMENT_A args[] = {
@@ -74,13 +78,32 @@ static const COMMAND_LINE_ARGUMENT_A args[] = {
 	  "Session bpp (color depth)" },
 	{ "buildconfig", COMMAND_LINE_VALUE_FLAG | COMMAND_LINE_PRINT_BUILDCONFIG, NULL, NULL, NULL, -1,
 	  NULL, "Print the build configuration" },
+	{ "cert", COMMAND_LINE_VALUE_REQUIRED,
+	  "[deny,ignore,name:<name>,tofu,fingerprint:<hash>:<hash as hex>[,fingerprint:<hash>:<another "
+	  "hash>]]",
+	  NULL, NULL, -1, NULL,
+	  "Certificate accept options. Use with care!"
+	  " * deny         ... Automatically abort connection if the certificate does not match, no "
+	  "user interaction.          "
+	  " * ignore       ... Ignore the certificate checks altogether (overrules all other options)  "
+	  "                        "
+	  " * name         ... Use the alternate <name> instead of the certificate subject to match "
+	  "locally stored certificates"
+	  " * tofu         ... Accept certificate unconditionally on first connect and deny on "
+	  "subsequent connections if the certificate does not match"
+	  " * fingerprints ... A list of certificate hashes that are accepted unconditionally for a "
+	  "connection" },
 	{ "cert-deny", COMMAND_LINE_VALUE_FLAG, NULL, NULL, NULL, -1, NULL,
-	  "Automatically abort connection for any certificate that can not be validated." },
-	{ "cert-ignore", COMMAND_LINE_VALUE_FLAG, NULL, NULL, NULL, -1, NULL, "Ignore certificate" },
+	  "[deprecated, use /cert:deny] Automatically abort connection for any certificate that can "
+	  "not be validated." },
+	{ "cert-ignore", COMMAND_LINE_VALUE_FLAG, NULL, NULL, NULL, -1, NULL,
+	  "[deprecated, use /cert:ignore] Ignore certificate" },
 	{ "cert-name", COMMAND_LINE_VALUE_REQUIRED, "<name>", NULL, NULL, -1, NULL,
-	  "Certificate name" },
+	  "[deprecated, use /cert:name:<name>] Certificate name" },
 	{ "cert-tofu", COMMAND_LINE_VALUE_FLAG, NULL, NULL, NULL, -1, NULL,
-	  "Automatically accept certificate on first connect" },
+	  "[deprecated, use /cert:tofu] Automatically accept certificate on first connect" },
+	{ "client-build-number", COMMAND_LINE_VALUE_REQUIRED, "<number>", NULL, NULL, -1, NULL,
+	  "Client Build Number sent to server (influences smartcard behaviour, see [MS-RDPESC])" },
 	{ "client-hostname", COMMAND_LINE_VALUE_REQUIRED, "<name>", NULL, NULL, -1, NULL,
 	  "Client Hostname to send to server" },
 	{ "clipboard", COMMAND_LINE_VALUE_BOOL, NULL, BoolValueTrue, NULL, -1, NULL,
@@ -140,8 +163,9 @@ static const COMMAND_LINE_ARGUMENT_A args[] = {
 #ifdef WITH_GFX_H264
 	{ "gfx", COMMAND_LINE_VALUE_OPTIONAL, "[[RFX|AVC420|AVC444],mask:<value>]", NULL, NULL, -1,
 	  NULL, "RDP8 graphics pipeline" },
-	{ "gfx-h264", COMMAND_LINE_VALUE_OPTIONAL, "[[AVC420|AVC444],mask:<value>]", NULL, NULL, -1,
-	  NULL, "RDP8.1 graphics pipeline using H264 codec" },
+	{ "gfx-h264", COMMAND_LINE_VALUE_OPTIONAL,
+	  "[[AVC420|AVC444],mask:<value>] [DEPRECATED] use /gfx:avc420 instead", NULL, NULL, -1, NULL,
+	  "RDP8.1 graphics pipeline using H264 codec" },
 #else
 	{ "gfx", COMMAND_LINE_VALUE_OPTIONAL, "RFX", NULL, NULL, -1, NULL, "RDP8 graphics pipeline" },
 #endif
@@ -178,10 +202,14 @@ static const COMMAND_LINE_ARGUMENT_A args[] = {
 #endif
 	{ "kbd", COMMAND_LINE_VALUE_REQUIRED, "0x<id> or <name>", NULL, NULL, -1, NULL,
 	  "Keyboard layout" },
+	{ "kbd-lang", COMMAND_LINE_VALUE_REQUIRED, "0x<id>", NULL, NULL, -1, NULL,
+	  "Keyboard active language identifier" },
 	{ "kbd-fn-key", COMMAND_LINE_VALUE_REQUIRED, "<value>", NULL, NULL, -1, NULL,
 	  "Function key value" },
 	{ "kbd-list", COMMAND_LINE_VALUE_FLAG | COMMAND_LINE_PRINT, NULL, NULL, NULL, -1, NULL,
 	  "List keyboard layouts" },
+	{ "kbd-lang-list", COMMAND_LINE_VALUE_OPTIONAL | COMMAND_LINE_PRINT, NULL, NULL, NULL, -1, NULL,
+	  "List keyboard languages" },
 	{ "kbd-subtype", COMMAND_LINE_VALUE_REQUIRED, "<id>", NULL, NULL, -1, NULL,
 	  "Keyboard subtype" },
 	{ "kbd-type", COMMAND_LINE_VALUE_REQUIRED, "<id>", NULL, NULL, -1, NULL, "Keyboard type" },
@@ -206,8 +234,10 @@ static const COMMAND_LINE_ARGUMENT_A args[] = {
 	  "Select monitors to use" },
 	{ "mouse-motion", COMMAND_LINE_VALUE_BOOL, NULL, BoolValueTrue, NULL, -1, NULL,
 	  "Send mouse motion" },
+#if defined(CHANNEL_TSMF_CLIENT)
 	{ "multimedia", COMMAND_LINE_VALUE_OPTIONAL, "[sys:<sys>,][dev:<dev>,][decoder:<decoder>]",
-	  NULL, NULL, -1, "mmr", "Redirect multimedia (video)" },
+	  NULL, NULL, -1, "mmr", "[DEPRECATED] Redirect multimedia (video) use /video instead" },
+#endif
 	{ "multimon", COMMAND_LINE_VALUE_OPTIONAL, "force", NULL, NULL, -1, NULL,
 	  "Use multiple monitors" },
 	{ "multitouch", COMMAND_LINE_VALUE_BOOL, NULL, BoolValueFalse, NULL, -1, NULL,
@@ -309,18 +339,28 @@ static const COMMAND_LINE_ARGUMENT_A args[] = {
 	  "SSH Agent forwarding channel" },
 	{ "t", COMMAND_LINE_VALUE_REQUIRED, "<title>", NULL, NULL, -1, "title", "Window title" },
 	{ "themes", COMMAND_LINE_VALUE_BOOL, NULL, BoolValueTrue, NULL, -1, NULL, "themes" },
+	{ "timeout", COMMAND_LINE_VALUE_REQUIRED, "<time in ms>", "9000", NULL, -1, "timeout",
+	  "Advanced setting for high latency links: Adjust connection timeout, use if you encounter "
+	  "timeout failures with your connection" },
 	{ "tls-ciphers", COMMAND_LINE_VALUE_REQUIRED, "[netmon|ma|ciphers]", NULL, NULL, -1, NULL,
 	  "Allowed TLS ciphers" },
 	{ "tls-seclevel", COMMAND_LINE_VALUE_REQUIRED, "<level>", "1", NULL, -1, NULL,
 	  "TLS security level - defaults to 1" },
 	{ "toggle-fullscreen", COMMAND_LINE_VALUE_BOOL, NULL, BoolValueTrue, NULL, -1, NULL,
 	  "Alt+Ctrl+Enter to toggle fullscreen" },
+	{ "tune", COMMAND_LINE_VALUE_REQUIRED, "<setting:value>,<setting:value>", "", NULL, -1, NULL,
+	  "[experimental] directly manipulate freerdp settings, use with extreme caution!" },
+	{ "tune-list", COMMAND_LINE_VALUE_FLAG, NULL, NULL, NULL, -1, NULL,
+	  "Print options allowed for /tune" },
 	{ "u", COMMAND_LINE_VALUE_REQUIRED, "[[<domain>\\]<user>|<user>[@<domain>]]", NULL, NULL, -1,
 	  NULL, "Username" },
 	{ "unmap-buttons", COMMAND_LINE_VALUE_BOOL, NULL, BoolValueFalse, NULL, -1, NULL,
 	  "Let server see real physical pointer button" },
-	{ "usb", COMMAND_LINE_VALUE_REQUIRED, "[dbg,][dev:<dev>,][id|addr,][auto]", NULL, NULL, -1,
-	  NULL, "Redirect USB device" },
+#ifdef CHANNEL_URBDRC_CLIENT
+	{ "usb", COMMAND_LINE_VALUE_REQUIRED,
+	  "[dbg,][id:<vid>:<pid>#...,][addr:<bus>:<addr>#...,][auto]", NULL, NULL, -1, NULL,
+	  "Redirect USB device" },
+#endif
 	{ "v", COMMAND_LINE_VALUE_REQUIRED, "<server>[:port]", NULL, NULL, -1, NULL,
 	  "Server hostname" },
 	{ "vc", COMMAND_LINE_VALUE_REQUIRED, "<channel>[,<options>]", NULL, NULL, -1, NULL,

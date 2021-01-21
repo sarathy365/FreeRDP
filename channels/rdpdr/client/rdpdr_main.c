@@ -598,7 +598,14 @@ static BOOL isAutomountLocation(const char* path)
 	size_t x;
 	char buffer[MAX_PATH];
 	uid_t uid = getuid();
-	const char* uname = getlogin();
+	char uname[MAX_PATH] = { 0 };
+
+#ifndef HAVE_GETLOGIN_R
+	strncpy(uname, getlogin(), sizeof(uname));
+#else
+	if (getlogin_r(uname, sizeof(uname)) != 0)
+		return FALSE;
+#endif
 
 	if (!path)
 		return FALSE;
@@ -670,7 +677,7 @@ static UINT handle_hotplug(rdpdrPlugin* rdpdr)
 		if (!path)
 			continue;
 		/* copy hotpluged device mount point to the dev_array */
-		if (isAutomountLocation(path) && (size <= MAX_USB_DEVICES))
+		if (isAutomountLocation(path) && (size < MAX_USB_DEVICES))
 		{
 			dev_array[size].path = _strdup(path);
 			dev_array[size++].to_add = TRUE;
@@ -1471,7 +1478,7 @@ static UINT rdpdr_virtual_channel_event_data_received(rdpdrPlugin* rdpdr, void* 
 
 	data_in = rdpdr->data_in;
 
-	if (!Stream_EnsureRemainingCapacity(data_in, (int)dataLength))
+	if (!Stream_EnsureRemainingCapacity(data_in, dataLength))
 	{
 		WLog_ERR(TAG, "Stream_EnsureRemainingCapacity failed!");
 		return ERROR_INVALID_DATA;
@@ -1509,15 +1516,14 @@ static VOID VCAPITYPE rdpdr_virtual_channel_open_event_ex(LPVOID lpUserParam, DW
 	UINT error = CHANNEL_RC_OK;
 	rdpdrPlugin* rdpdr = (rdpdrPlugin*)lpUserParam;
 
-	if (!rdpdr || !pData || (rdpdr->OpenHandle != openHandle))
-	{
-		WLog_ERR(TAG, "error no match");
-		return;
-	}
-
 	switch (event)
 	{
 		case CHANNEL_EVENT_DATA_RECEIVED:
+			if (!rdpdr || !pData || (rdpdr->OpenHandle != openHandle))
+			{
+				WLog_ERR(TAG, "error no match");
+				return;
+			}
 			if ((error = rdpdr_virtual_channel_event_data_received(rdpdr, pData, dataLength,
 			                                                       totalLength, dataFlags)))
 				WLog_ERR(TAG,
@@ -1538,7 +1544,7 @@ static VOID VCAPITYPE rdpdr_virtual_channel_open_event_ex(LPVOID lpUserParam, DW
 			break;
 	}
 
-	if (error && rdpdr->rdpcontext)
+	if (error && rdpdr && rdpdr->rdpcontext)
 		setChannelError(rdpdr->rdpcontext, error,
 		                "rdpdr_virtual_channel_open_event_ex reported an error");
 
@@ -1603,6 +1609,12 @@ static DWORD WINAPI rdpdr_virtual_channel_client_thread(LPVOID arg)
 	return 0;
 }
 
+static void queue_free(void* obj)
+{
+	wStream* s = obj;
+	Stream_Free(s, TRUE);
+}
+
 /**
  * Function description
  *
@@ -1630,6 +1642,8 @@ static UINT rdpdr_virtual_channel_event_connected(rdpdrPlugin* rdpdr, LPVOID pDa
 		WLog_ERR(TAG, "MessageQueue_New failed!");
 		return CHANNEL_RC_NO_MEMORY;
 	}
+
+	rdpdr->queue->object.fnObjectFree = queue_free;
 
 	if (!(rdpdr->thread =
 	          CreateThread(NULL, 0, rdpdr_virtual_channel_client_thread, (void*)rdpdr, 0, NULL)))

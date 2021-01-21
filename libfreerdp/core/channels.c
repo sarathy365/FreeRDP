@@ -49,13 +49,13 @@
 
 #define TAG FREERDP_TAG("core.channels")
 
-BOOL freerdp_channel_send(rdpRdp* rdp, UINT16 channelId, const BYTE* data, int size)
+BOOL freerdp_channel_send(rdpRdp* rdp, UINT16 channelId, const BYTE* data, size_t size)
 {
 	DWORD i;
-	int left;
+	size_t left;
 	wStream* s;
 	UINT32 flags;
-	int chunkSize;
+	size_t chunkSize;
 	rdpMcs* mcs = rdp->mcs;
 	rdpMcsChannel* channel = NULL;
 
@@ -84,7 +84,7 @@ BOOL freerdp_channel_send(rdpRdp* rdp, UINT16 channelId, const BYTE* data, int s
 		if (!s)
 			return FALSE;
 
-		if (left > (int)rdp->settings->VirtualChannelChunkSize)
+		if (left > rdp->settings->VirtualChannelChunkSize)
 		{
 			chunkSize = rdp->settings->VirtualChannelChunkSize;
 		}
@@ -122,28 +122,58 @@ BOOL freerdp_channel_send(rdpRdp* rdp, UINT16 channelId, const BYTE* data, int s
 	return TRUE;
 }
 
-BOOL freerdp_channel_process(freerdp* instance, wStream* s, UINT16 channelId)
+BOOL freerdp_channel_process(freerdp* instance, wStream* s, UINT16 channelId, size_t packetLength)
 {
+	BOOL rc = FALSE;
 	UINT32 length;
 	UINT32 flags;
-	int chunkLength;
+	size_t chunkLength;
+
+	if (packetLength < 8)
+	{
+		WLog_ERR(TAG, "Header length %" PRIdz " bytes promised, none available", packetLength);
+		return FALSE;
+	}
+	packetLength -= 8;
 
 	if (Stream_GetRemainingLength(s) < 8)
 		return FALSE;
 
+	/* [MS-RDPBCGR] 3.1.5.2.2 Processing of Virtual Channel PDU
+	 * chunked data. Length is the total size of the combined data,
+	 * chunkLength is the actual data received.
+	 * check chunkLength against packetLength, which is the TPKT header size.
+	 */
 	Stream_Read_UINT32(s, length);
 	Stream_Read_UINT32(s, flags);
 	chunkLength = Stream_GetRemainingLength(s);
-	IFCALL(instance->ReceiveChannelData, instance, channelId, Stream_Pointer(s), chunkLength, flags,
-	       length);
-	return TRUE;
+	if (packetLength != chunkLength)
+	{
+		WLog_ERR(TAG, "Header length %" PRIdz " != actual length %" PRIdz, packetLength,
+		         chunkLength);
+		return FALSE;
+	}
+	if (length < chunkLength)
+	{
+		WLog_ERR(TAG, "Expected %" PRIu32 " bytes, but have %" PRIdz, length, chunkLength);
+		return FALSE;
+	}
+	IFCALLRET(instance->ReceiveChannelData, rc, instance, channelId, Stream_Pointer(s), chunkLength,
+	          flags, length);
+	if (!rc)
+	{
+		WLog_WARN(TAG, "ReceiveChannelData returned %d", rc);
+		return FALSE;
+	}
+
+	return Stream_SafeSeek(s, chunkLength);
 }
 
 BOOL freerdp_channel_peer_process(freerdp_peer* client, wStream* s, UINT16 channelId)
 {
 	UINT32 length;
 	UINT32 flags;
-	int chunkLength;
+	size_t chunkLength;
 
 	if (Stream_GetRemainingLength(s) < 8)
 		return FALSE;
@@ -154,6 +184,7 @@ BOOL freerdp_channel_peer_process(freerdp_peer* client, wStream* s, UINT16 chann
 
 	if (client->VirtualChannelRead)
 	{
+		int rc;
 		UINT32 index;
 		BOOL found = FALSE;
 		HANDLE hChannel = 0;
@@ -176,16 +207,18 @@ BOOL freerdp_channel_peer_process(freerdp_peer* client, wStream* s, UINT16 chann
 		if (!found)
 			return FALSE;
 
-		client->VirtualChannelRead(client, hChannel, Stream_Pointer(s),
-		                           Stream_GetRemainingLength(s));
+		rc = client->VirtualChannelRead(client, hChannel, Stream_Pointer(s), chunkLength);
+		if (rc < 0)
+			return FALSE;
 	}
 	else if (client->ReceiveChannelData)
 	{
-		client->ReceiveChannelData(client, channelId, Stream_Pointer(s), chunkLength, flags,
-		                           length);
+		BOOL rc = client->ReceiveChannelData(client, channelId, Stream_Pointer(s), chunkLength,
+		                                     flags, length);
+		if (!rc)
+			return FALSE;
 	}
-
-	return TRUE;
+	return Stream_SafeSeek(s, chunkLength);
 }
 
 static const WtsApiFunctionTable FreeRDP_WtsApiFunctionTable = {

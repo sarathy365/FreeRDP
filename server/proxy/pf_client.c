@@ -35,9 +35,12 @@
 #include "pf_update.h"
 #include "pf_log.h"
 #include "pf_modules.h"
+#include "pf_input.h"
 #include "pf_capture.h"
 
 #define TAG PROXY_TAG("client")
+
+static pReceiveChannelData client_receive_channel_data_original = NULL;
 
 static BOOL proxy_server_reactivate(rdpContext* ps, const rdpContext* pc)
 {
@@ -70,10 +73,24 @@ static void pf_client_on_error_info(void* ctx, ErrorInfoEventArgs* e)
 	freerdp_send_error_info(ps->context.rdp);
 }
 
-static BOOL pf_client_load_rdpsnd(pClientContext* pc, proxyConfig* config)
+static void pf_client_on_activated(void* ctx, ActivatedEventArgs* e)
+{
+	pClientContext* pc = (pClientContext*)ctx;
+	pServerContext* ps = pc->pdata->ps;
+	freerdp_peer* peer = ps->context.peer;
+
+	LOG_INFO(TAG, pc, "client activated, registering server input callbacks");
+
+	/* Register server input/update callbacks only after proxy client is fully activated */
+	pf_server_register_input_callbacks(peer->input);
+	pf_server_register_update_callbacks(peer->update);
+}
+
+static BOOL pf_client_load_rdpsnd(pClientContext* pc)
 {
 	rdpContext* context = (rdpContext*)pc;
 	pServerContext* ps = pc->pdata->ps;
+	proxyConfig* config = pc->pdata->config;
 
 	/*
 	 * if AudioOutput is enabled in proxy and client connected with rdpsnd, use proxy as rdpsnd
@@ -96,12 +113,63 @@ static BOOL pf_client_load_rdpsnd(pClientContext* pc, proxyConfig* config)
 	return TRUE;
 }
 
-/**
- * Called before a connection is established.
- *
- * TODO: Take client to proxy settings and use channel whitelist to filter out
- * unwanted channels.
- */
+static BOOL pf_client_passthrough_channels_init(pClientContext* pc)
+{
+	pServerContext* ps = pc->pdata->ps;
+	rdpSettings* settings = pc->context.settings;
+	proxyConfig* config = pc->pdata->config;
+	size_t i;
+
+	if (settings->ChannelCount + config->PassthroughCount >= settings->ChannelDefArraySize)
+	{
+		LOG_ERR(TAG, pc, "too many channels");
+		return FALSE;
+	}
+
+	for (i = 0; i < config->PassthroughCount; i++)
+	{
+		const char* channel_name = config->Passthrough[i];
+		CHANNEL_DEF channel = { 0 };
+
+		/* only connect connect this channel if already joined in peer connection */
+		if (!WTSVirtualChannelManagerIsChannelJoined(ps->vcm, channel_name))
+		{
+			LOG_INFO(TAG, ps, "client did not connected with channel %s, skipping passthrough",
+			         channel_name);
+
+			continue;
+		}
+
+		channel.options = CHANNEL_OPTION_INITIALIZED; /* TODO: Export to config. */
+		strncpy(channel.name, channel_name, CHANNEL_NAME_LEN);
+
+		settings->ChannelDefArray[settings->ChannelCount++] = channel;
+	}
+
+	return TRUE;
+}
+
+static BOOL pf_client_use_peer_load_balance_info(pClientContext* pc)
+{
+	pServerContext* ps = pc->pdata->ps;
+	rdpSettings* settings = pc->context.settings;
+	DWORD lb_info_len;
+	const char* lb_info = freerdp_nego_get_routing_token(&ps->context, &lb_info_len);
+	if (!lb_info)
+		return TRUE;
+
+	free(settings->LoadBalanceInfo);
+
+	settings->LoadBalanceInfoLength = lb_info_len;
+	settings->LoadBalanceInfo = malloc(settings->LoadBalanceInfoLength);
+
+	if (!settings->LoadBalanceInfo)
+		return FALSE;
+
+	CopyMemory(settings->LoadBalanceInfo, lb_info, settings->LoadBalanceInfoLength);
+	return TRUE;
+}
+
 static BOOL pf_client_pre_connect(freerdp* instance)
 {
 	pClientContext* pc = (pClientContext*)instance->context;
@@ -133,6 +201,7 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 	settings->DynamicResolutionUpdate = config->DisplayControl;
 
 	settings->AutoReconnectionEnabled = TRUE;
+
 	/**
 	 * Register the channel listeners.
 	 * They are required to set up / tear down channels if they are loaded.
@@ -142,14 +211,27 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 	PubSub_SubscribeChannelDisconnected(instance->context->pubSub,
 	                                    pf_channels_on_client_channel_disconnect);
 	PubSub_SubscribeErrorInfo(instance->context->pubSub, pf_client_on_error_info);
-
+	PubSub_SubscribeActivated(instance->context->pubSub, pf_client_on_activated);
 	/**
 	 * Load all required plugins / channels / libraries specified by current
 	 * settings.
 	 */
-	WLog_INFO(TAG, "Loading addins");
+	LOG_INFO(TAG, pc, "Loading addins");
 
-	if (!pf_client_load_rdpsnd(pc, config))
+	if (!config->UseLoadBalanceInfo)
+	{
+		/* if target is static (i.e fetched from config). make sure to use peer's load-balance info,
+		 * in order to support broker redirection.
+		 */
+
+		if (!pf_client_use_peer_load_balance_info(pc))
+			return FALSE;
+	}
+
+	if (!pf_client_passthrough_channels_init(pc))
+		return FALSE;
+
+	if (!pf_client_load_rdpsnd(pc))
 	{
 		LOG_ERR(TAG, pc, "Failed to load rdpsnd client");
 		return FALSE;
@@ -157,11 +239,54 @@ static BOOL pf_client_pre_connect(freerdp* instance)
 
 	if (!freerdp_client_load_addins(instance->context->channels, instance->settings))
 	{
-		WLog_ERR(TAG, "Failed to load addins");
+		LOG_ERR(TAG, pc, "Failed to load addins");
 		return FALSE;
 	}
 
 	return TRUE;
+}
+
+static BOOL pf_client_receive_channel_data_hook(freerdp* instance, UINT16 channelId,
+                                                const BYTE* data, size_t size, UINT32 flags,
+                                                size_t totalSize)
+{
+	pClientContext* pc = (pClientContext*)instance->context;
+	pServerContext* ps = pc->pdata->ps;
+	proxyData* pdata = ps->pdata;
+	proxyConfig* config = pdata->config;
+	size_t i;
+
+	const char* channel_name = freerdp_channels_get_name_by_id(instance, channelId);
+
+	for (i = 0; i < config->PassthroughCount; i++)
+	{
+		if (strncmp(channel_name, config->Passthrough[i], CHANNEL_NAME_LEN) == 0)
+		{
+			proxyChannelDataEventInfo ev;
+			UINT64 server_channel_id;
+
+			ev.channel_id = channelId;
+			ev.channel_name = channel_name;
+			ev.data = data;
+			ev.data_len = size;
+
+			if (!pf_modules_run_filter(FILTER_TYPE_CLIENT_PASSTHROUGH_CHANNEL_DATA, pdata, &ev))
+				return FALSE;
+
+			server_channel_id = (UINT64)HashTable_GetItemValue(ps->vc_ids, (void*)channel_name);
+			return ps->context.peer->SendChannelData(ps->context.peer, (UINT16)server_channel_id,
+			                                         data, size);
+		}
+	}
+
+	return client_receive_channel_data_original(instance, channelId, data, size, flags, totalSize);
+}
+
+static BOOL pf_client_on_server_heartbeat(freerdp* instance, BYTE period, BYTE count1, BYTE count2)
+{
+	pClientContext* pc = (pClientContext*)instance->context;
+	pServerContext* ps = pc->pdata->ps;
+	return freerdp_heartbeat_send_heartbeat_pdu(ps->context.peer, period, count1, count2);
 }
 
 /**
@@ -224,10 +349,27 @@ static BOOL pf_client_post_connect(freerdp* instance)
 
 	pf_client_register_update_callbacks(update);
 
+	/* virtual channels receive data hook */
+	client_receive_channel_data_original = instance->ReceiveChannelData;
+	instance->ReceiveChannelData = pf_client_receive_channel_data_hook;
+
+	/* populate channel name -> channel ids map */
+	{
+		size_t i;
+		for (i = 0; i < config->PassthroughCount; i++)
+		{
+			char* channel_name = config->Passthrough[i];
+			UINT64 channel_id = (UINT64)freerdp_channels_get_id_by_name(instance, channel_name);
+			HashTable_Add(pc->vc_ids, (void*)channel_name, (void*)channel_id);
+		}
+	}
+
+	instance->heartbeat->ServerHeartbeat = pf_client_on_server_heartbeat;
+
 	/*
-	 * after the connection fully established and settings were negotiated with target server, send
-	 * a reactivation sequence to the client with the negotiated settings. This way, settings are
-	 * synchorinized between proxy's peer and and remote target.
+	 * after the connection fully established and settings were negotiated with target server,
+	 * send a reactivation sequence to the client with the negotiated settings. This way,
+	 * settings are synchorinized between proxy's peer and and remote target.
 	 */
 	return proxy_server_reactivate(ps, context);
 }
@@ -312,8 +454,12 @@ static BOOL pf_client_connect_without_nla(pClientContext* pc)
 static BOOL pf_client_connect(freerdp* instance)
 {
 	pClientContext* pc = (pClientContext*)instance->context;
+	rdpSettings* settings = instance->settings;
 	BOOL rc = FALSE;
 	BOOL retry = FALSE;
+
+	LOG_INFO(TAG, pc, "connecting using client info: Username: %s, Domain: %s", settings->Username,
+	         settings->Domain);
 
 	pf_client_set_security_settings(pc);
 	if (pf_client_should_retry_without_nla(pc))
@@ -478,6 +624,19 @@ static DWORD pf_client_verify_changed_certificate_ex(
 	return 1;
 }
 
+static void pf_client_context_free(freerdp* instance, rdpContext* context)
+{
+	pClientContext* pc = (pClientContext*)context;
+
+	if (!pc)
+		return;
+
+	free(pc->frames_dir);
+	pc->frames_dir = NULL;
+
+	HashTable_Free(pc->vc_ids);
+}
+
 static BOOL pf_client_client_new(freerdp* instance, rdpContext* context)
 {
 	if (!instance || !context)
@@ -489,19 +648,9 @@ static BOOL pf_client_client_new(freerdp* instance, rdpContext* context)
 	instance->VerifyCertificateEx = pf_client_verify_certificate_ex;
 	instance->VerifyChangedCertificateEx = pf_client_verify_changed_certificate_ex;
 	instance->LogonErrorInfo = pf_logon_error_info;
+	instance->ContextFree = pf_client_context_free;
 
 	return TRUE;
-}
-
-static void pf_client_client_free(freerdp* instance, rdpContext* context)
-{
-	pClientContext* pc = (pClientContext*)context;
-
-	if (!pc)
-		return;
-
-	free(pc->frames_dir);
-	pc->frames_dir = NULL;
 }
 
 static int pf_client_client_stop(rdpContext* context)
@@ -535,7 +684,6 @@ int RdpClientEntry(RDP_CLIENT_ENTRY_POINTS* pEntryPoints)
 	pEntryPoints->ContextSize = sizeof(pClientContext);
 	/* Client init and finish */
 	pEntryPoints->ClientNew = pf_client_client_new;
-	pEntryPoints->ClientFree = pf_client_client_free;
 	pEntryPoints->ClientStop = pf_client_client_stop;
 	return 0;
 }

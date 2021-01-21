@@ -216,6 +216,15 @@ void nla_identity_free(SEC_WINNT_AUTH_IDENTITY* identity)
  * @param credssp
  */
 
+static BOOL is_empty(const char* str)
+{
+	if (!str)
+		return TRUE;
+	if (strlen(str) == 0)
+		return TRUE;
+	return FALSE;
+}
+
 static int nla_client_init(rdpNla* nla)
 {
 	char* spn;
@@ -231,13 +240,13 @@ static int nla_client_init(rdpNla* nla)
 	if (settings->RestrictedAdminModeRequired)
 		settings->DisableCredentialsDelegation = TRUE;
 
-	if ((!settings->Username) || (!strlen(settings->Username)) ||
-	    ((!settings->Password) && (!settings->RedirectionPassword)))
+	if (is_empty(settings->Username) ||
+	    (is_empty(settings->Password) && is_empty((const char*)settings->RedirectionPassword)))
 	{
 		PromptPassword = TRUE;
 	}
 
-	if (PromptPassword && settings->Username && strlen(settings->Username))
+	if (PromptPassword && !is_empty(settings->Username))
 	{
 		sam = SamOpen(NULL, TRUE);
 
@@ -265,7 +274,7 @@ static int nla_client_init(rdpNla* nla)
 	{
 		if (settings->RestrictedAdminModeRequired)
 		{
-			if ((settings->PasswordHash) && (strlen(settings->PasswordHash) > 0))
+			if (!is_empty(settings->PasswordHash))
 				PromptPassword = FALSE;
 		}
 	}
@@ -274,6 +283,9 @@ static int nla_client_init(rdpNla* nla)
 
 	if (PromptPassword)
 	{
+		if (freerdp_shall_disconnect(instance))
+			return 0;
+
 		if (!instance->Authenticate)
 		{
 			freerdp_set_last_error_log(instance->context,
@@ -1132,6 +1144,7 @@ SECURITY_STATUS nla_encrypt_public_key_echo(rdpNla* nla)
 	const BOOL ntlm = (_tcsncmp(nla->packageName, NTLM_SSP_NAME, ARRAYSIZE(NTLM_SSP_NAME)) == 0);
 	public_key_length = nla->PublicKey.cbBuffer;
 
+	sspi_SecBufferFree(&nla->pubKeyAuth);
 	if (!sspi_SecBufferAlloc(&nla->pubKeyAuth,
 	                         public_key_length + nla->ContextSizes.cbSecurityTrailer))
 		return SEC_E_INSUFFICIENT_MEMORY;
@@ -1200,6 +1213,7 @@ SECURITY_STATUS nla_encrypt_public_key_hash(rdpNla* nla)
 	const size_t hashSize =
 	    nla->server ? sizeof(ServerClientHashMagic) : sizeof(ClientServerHashMagic);
 
+	sspi_SecBufferFree(&nla->pubKeyAuth);
 	if (!sspi_SecBufferAlloc(&nla->pubKeyAuth, auth_data_length))
 	{
 		status = SEC_E_INSUFFICIENT_MEMORY;
@@ -2057,6 +2071,7 @@ static int nla_decode_ts_request(rdpNla* nla, wStream* s)
 			return -1;
 		}
 
+		sspi_SecBufferFree(&nla->negoToken);
 		if (!sspi_SecBufferAlloc(&nla->negoToken, length))
 			return -1;
 
@@ -2085,6 +2100,7 @@ static int nla_decode_ts_request(rdpNla* nla, wStream* s)
 		    Stream_GetRemainingLength(s) < length)
 			return -1;
 
+		sspi_SecBufferFree(&nla->pubKeyAuth);
 		if (!sspi_SecBufferAlloc(&nla->pubKeyAuth, length))
 			return -1;
 
@@ -2109,6 +2125,7 @@ static int nla_decode_ts_request(rdpNla* nla, wStream* s)
 				    Stream_GetRemainingLength(s) < length)
 					return -1;
 
+				sspi_SecBufferFree(&nla->ClientNonce);
 				if (!sspi_SecBufferAlloc(&nla->ClientNonce, length))
 					return -1;
 
@@ -2345,10 +2362,6 @@ rdpNla* nla_new(freerdp* instance, rdpTransport* transport, rdpSettings* setting
 	nla->sendSeqNum = 0;
 	nla->recvSeqNum = 0;
 	nla->version = 6;
-	ZeroMemory(&nla->ClientNonce, sizeof(SecBuffer));
-	ZeroMemory(&nla->negoToken, sizeof(SecBuffer));
-	ZeroMemory(&nla->pubKeyAuth, sizeof(SecBuffer));
-	ZeroMemory(&nla->authInfo, sizeof(SecBuffer));
 	SecInvalidateHandle(&nla->context);
 
 	if (settings->NtlmSamFile)
@@ -2453,6 +2466,7 @@ void nla_free(rdpNla* nla)
 	sspi_SecBufferFree(&nla->tsCredentials);
 	free(nla->ServicePrincipalName);
 	nla_identity_free(nla->identity);
+	nla_buffer_free(nla);
 	free(nla);
 }
 

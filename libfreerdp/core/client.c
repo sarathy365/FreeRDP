@@ -61,14 +61,43 @@ static CHANNEL_OPEN_DATA* freerdp_channels_find_channel_open_data_by_name(rdpCha
 static rdpMcsChannel* freerdp_channels_find_channel_by_name(rdpRdp* rdp, const char* name)
 {
 	UINT32 index;
-	rdpMcsChannel* channel;
-	rdpMcs* mcs = rdp->mcs;
+	rdpMcsChannel* channel = NULL;
+	rdpMcs* mcs = NULL;
+
+	if (!rdp)
+		return NULL;
+
+	mcs = rdp->mcs;
 
 	for (index = 0; index < mcs->channelCount; index++)
 	{
 		channel = &mcs->channels[index];
 
 		if (strncmp(name, channel->Name, CHANNEL_NAME_LEN) == 0)
+		{
+			return channel;
+		}
+	}
+
+	return NULL;
+}
+
+static rdpMcsChannel* freerdp_channels_find_channel_by_id(rdpRdp* rdp, UINT16 channel_id)
+{
+	UINT32 index;
+	rdpMcsChannel* channel = NULL;
+	rdpMcs* mcs = NULL;
+
+	if (!rdp)
+		return NULL;
+
+	mcs = rdp->mcs;
+
+	for (index = 0; index < mcs->channelCount; index++)
+	{
+		channel = &mcs->channels[index];
+
+		if (channel->ChannelId == channel_id)
 		{
 			return channel;
 		}
@@ -390,20 +419,33 @@ fail:
 	return error;
 }
 
-int freerdp_channels_data(freerdp* instance, UINT16 channelId, BYTE* data, int dataSize, int flags,
-                          int totalSize)
+BOOL freerdp_channels_data(freerdp* instance, UINT16 channelId, const BYTE* cdata, size_t dataSize,
+                           UINT32 flags, size_t totalSize)
 {
 	UINT32 index;
 	rdpMcs* mcs;
 	rdpChannels* channels;
 	rdpMcsChannel* channel = NULL;
 	CHANNEL_OPEN_DATA* pChannelOpenData;
+	union {
+		const BYTE* pcb;
+		BYTE* pb;
+	} data;
+
+	data.pcb = cdata;
+	if (!instance || !data.pcb)
+	{
+		WLog_ERR(TAG, "%s(%p, %" PRIu16 ", %p, 0x%08x): Invalid arguments", __FUNCTION__, instance,
+		         channelId, data, flags);
+		return FALSE;
+	}
+
 	mcs = instance->context->rdp->mcs;
 	channels = instance->context->channels;
 
 	if (!channels || !mcs)
 	{
-		return 1;
+		return FALSE;
 	}
 
 	for (index = 0; index < mcs->channelCount; index++)
@@ -417,30 +459,56 @@ int freerdp_channels_data(freerdp* instance, UINT16 channelId, BYTE* data, int d
 
 	if (!channel)
 	{
-		return 1;
+		return FALSE;
 	}
 
 	pChannelOpenData = freerdp_channels_find_channel_open_data_by_name(channels, channel->Name);
 
 	if (!pChannelOpenData)
 	{
-		return 1;
+		return FALSE;
 	}
 
 	if (pChannelOpenData->pChannelOpenEventProc)
 	{
 		pChannelOpenData->pChannelOpenEventProc(pChannelOpenData->OpenHandle,
-		                                        CHANNEL_EVENT_DATA_RECEIVED, data, dataSize,
+		                                        CHANNEL_EVENT_DATA_RECEIVED, data.pb, dataSize,
 		                                        totalSize, flags);
 	}
 	else if (pChannelOpenData->pChannelOpenEventProcEx)
 	{
 		pChannelOpenData->pChannelOpenEventProcEx(
 		    pChannelOpenData->lpUserParam, pChannelOpenData->OpenHandle,
-		    CHANNEL_EVENT_DATA_RECEIVED, data, dataSize, totalSize, flags);
+		    CHANNEL_EVENT_DATA_RECEIVED, data.pb, dataSize, totalSize, flags);
 	}
 
-	return 0;
+	return TRUE;
+}
+
+UINT16 freerdp_channels_get_id_by_name(freerdp* instance, const char* channel_name)
+{
+	rdpMcsChannel* mcsChannel;
+	if (!instance || !channel_name)
+		return -1;
+
+	mcsChannel = freerdp_channels_find_channel_by_name(instance->context->rdp, channel_name);
+	if (!mcsChannel)
+		return -1;
+
+	return mcsChannel->ChannelId;
+}
+
+const char* freerdp_channels_get_name_by_id(freerdp* instance, UINT16 channelId)
+{
+	rdpMcsChannel* mcsChannel;
+	if (!instance)
+		return NULL;
+
+	mcsChannel = freerdp_channels_find_channel_by_id(instance->context->rdp, channelId);
+	if (!mcsChannel)
+		return NULL;
+
+	return (const char*)mcsChannel->Name;
 }
 
 BOOL freerdp_channels_process_message_free(wMessage* message, DWORD type)

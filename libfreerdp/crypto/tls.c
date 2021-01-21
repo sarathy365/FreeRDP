@@ -611,13 +611,15 @@ static SecPkgContext_Bindings* tls_get_channel_bindings(X509* cert)
 	SEC_CHANNEL_BINDINGS* ChannelBindings;
 	SecPkgContext_Bindings* ContextBindings;
 	const size_t PrefixLength = strnlen(TLS_SERVER_END_POINT, ARRAYSIZE(TLS_SERVER_END_POINT));
-	BYTE CertificateHash[32] = { 0 };
-	X509_digest(cert, EVP_sha256(), CertificateHash, &CertificateHashLength);
+	BYTE* CertificateHash = crypto_cert_hash(cert, "sha256", &CertificateHashLength);
+	if (!CertificateHash)
+		return NULL;
+
 	ChannelBindingTokenLength = PrefixLength + CertificateHashLength;
 	ContextBindings = (SecPkgContext_Bindings*)calloc(1, sizeof(SecPkgContext_Bindings));
 
 	if (!ContextBindings)
-		return NULL;
+		goto out_free;
 
 	ContextBindings->BindingsLength = sizeof(SEC_CHANNEL_BINDINGS) + ChannelBindingTokenLength;
 	ChannelBindings = (SEC_CHANNEL_BINDINGS*)calloc(1, ContextBindings->BindingsLength);
@@ -631,8 +633,10 @@ static SecPkgContext_Bindings* tls_get_channel_bindings(X509* cert)
 	ChannelBindingToken = &((BYTE*)ChannelBindings)[ChannelBindings->dwApplicationDataOffset];
 	memcpy(ChannelBindingToken, TLS_SERVER_END_POINT, PrefixLength);
 	memcpy(ChannelBindingToken + PrefixLength, CertificateHash, CertificateHashLength);
+	free(CertificateHash);
 	return ContextBindings;
 out_free:
+	free(CertificateHash);
 	free(ContextBindings);
 	return NULL;
 }
@@ -882,7 +886,7 @@ BOOL tls_accept(rdpTls* tls, BIO* underlying, rdpSettings* settings)
 {
 	long options = 0;
 	BIO* bio;
-	RSA* rsa;
+	EVP_PKEY* privkey;
 	X509* x509;
 	/**
 	 * SSL_OP_NO_SSLv2:
@@ -947,19 +951,19 @@ BOOL tls_accept(rdpTls* tls, BIO* underlying, rdpSettings* settings)
 		return FALSE;
 	}
 
-	rsa = PEM_read_bio_RSAPrivateKey(bio, NULL, NULL, NULL);
+	privkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
 	BIO_free_all(bio);
 
-	if (!rsa)
+	if (!privkey)
 	{
 		WLog_ERR(TAG, "invalid private key");
 		return FALSE;
 	}
 
-	if (SSL_use_RSAPrivateKey(tls->ssl, rsa) <= 0)
+	if (SSL_use_PrivateKey(tls->ssl, privkey) <= 0)
 	{
-		WLog_ERR(TAG, "SSL_CTX_use_RSAPrivateKey_file failed");
-		RSA_free(rsa);
+		WLog_ERR(TAG, "SSL_CTX_use_PrivateKey_file failed");
+		EVP_PKEY_free(privkey);
 		return FALSE;
 	}
 
@@ -1184,6 +1188,49 @@ static BOOL is_accepted(rdpTls* tls, const BYTE* pem, size_t length)
 	return FALSE;
 }
 
+static BOOL is_accepted_fingerprint(CryptoCert cert, const char* CertificateAcceptedFingerprints)
+{
+	BOOL rc = FALSE;
+	if (CertificateAcceptedFingerprints)
+	{
+		char* context = NULL;
+		char* copy = _strdup(CertificateAcceptedFingerprints);
+		char* cur = strtok_s(copy, ",", &context);
+		while (cur)
+		{
+			char* subcontext = NULL;
+			BOOL equal;
+			char* strhash;
+			const char* h = strtok_s(cur, ":", &subcontext);
+			const char* fp;
+
+			if (!h)
+				continue;
+
+			fp = h + strlen(h) + 1;
+			if (!fp)
+				continue;
+
+			strhash = crypto_cert_fingerprint_by_hash(cert->px509, h);
+			if (!strhash)
+				continue;
+
+			equal = (_stricmp(strhash, fp) == 0);
+			free(strhash);
+			if (equal)
+			{
+				rc = TRUE;
+				break;
+			}
+
+			cur = strtok_s(NULL, ",", &context);
+		}
+		free(copy);
+	}
+
+	return rc;
+}
+
 static BOOL accept_cert(rdpTls* tls, const BYTE* pem, UINT32 length)
 {
 	rdpSettings* settings = tls->settings;
@@ -1338,11 +1385,20 @@ int tls_verify_certificate(rdpTls* tls, CryptoCert cert, const char* hostname, U
 	BYTE* pemCert = NULL;
 	DWORD flags = VERIFY_CERT_FLAG_NONE;
 
+	if (freerdp_shall_disconnect(instance))
+		return -1;
+
 	if (!tls_extract_pem(cert, &pemCert, &length))
 		goto end;
 
 	/* Check, if we already accepted this key. */
 	if (is_accepted(tls, pemCert, length))
+	{
+		verification_status = 1;
+		goto end;
+	}
+
+	if (is_accepted_fingerprint(cert, tls->settings->CertificateAcceptedFingerprints))
 	{
 		verification_status = 1;
 		goto end;
@@ -1416,7 +1472,8 @@ int tls_verify_certificate(rdpTls* tls, CryptoCert cert, const char* hostname, U
 			}
 		}
 
-		/* if the certificate is valid and the certificate name matches, verification succeeds */
+		/* if the certificate is valid and the certificate name matches, verification succeeds
+		 */
 		if (certificate_status && hostname_match)
 			verification_status = 1; /* success! */
 
@@ -1436,10 +1493,27 @@ int tls_verify_certificate(rdpTls* tls, CryptoCert cert, const char* hostname, U
 			fingerprint = crypto_cert_fingerprint(cert->px509);
 			/* search for matching entry in known_hosts file */
 			match = certificate_data_match(tls->certificate_store, certificate_data);
+			{
+				int match_old = -1;
+				char* sha1 = crypto_cert_fingerprint_by_hash(cert->px509, "sha1");
+				rdpCertificateData* certificate_data_sha1 =
+				    certificate_data_new(hostname, port, subject, issuer, sha1);
+
+				if (sha1 && certificate_data_sha1)
+					match_old =
+					    certificate_data_match(tls->certificate_store, certificate_data_sha1);
+
+				if (match_old == 0)
+					flags |= VERIFY_CERT_FLAG_MATCH_LEGACY_SHA1;
+
+				certificate_data_free(certificate_data_sha1);
+				free(sha1);
+			}
 
 			if (match == 1)
 			{
-				/* no entry was found in known_hosts file, prompt user for manual verification */
+				/* no entry was found in known_hosts file, prompt user for manual verification
+				 */
 				if (!hostname_match)
 					tls_print_certificate_name_mismatch_error(hostname, port, common_name,
 					                                          dns_names, dns_names_count);
@@ -1485,8 +1559,8 @@ int tls_verify_certificate(rdpTls* tls, CryptoCert cert, const char* hostname, U
 				char* old_subject = NULL;
 				char* old_issuer = NULL;
 				char* old_fingerprint = NULL;
-				/* entry was found in known_hosts file, but fingerprint does not match. ask user to
-				 * use it */
+				/* entry was found in known_hosts file, but fingerprint does not match. ask user
+				 * to use it */
 				tls_print_certificate_error(hostname, port, fingerprint,
 				                            tls->certificate_store->file);
 

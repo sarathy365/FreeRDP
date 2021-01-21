@@ -165,11 +165,11 @@
 #define CLW_ENTROPY_RLGR1 0x01
 #define CLW_ENTROPY_RLGR3 0x04
 
-FREERDP_LOCAL BOOL rdp_recv_get_active_header(rdpRdp* rdp, wStream* s, UINT16* pChannelId);
+FREERDP_LOCAL BOOL rdp_recv_get_active_header(rdpRdp* rdp, wStream* s, UINT16* pChannelId,
+                                              UINT16* length);
 FREERDP_LOCAL BOOL rdp_recv_demand_active(rdpRdp* rdp, wStream* s);
 FREERDP_LOCAL BOOL rdp_send_demand_active(rdpRdp* rdp);
-FREERDP_LOCAL BOOL rdp_recv_confirm_active(rdpRdp* rdp, wStream* s);
-FREERDP_LOCAL BOOL rdp_write_confirm_active(wStream* s, rdpSettings* settings);
+FREERDP_LOCAL BOOL rdp_recv_confirm_active(rdpRdp* rdp, wStream* s, UINT16 pduLength);
 FREERDP_LOCAL BOOL rdp_send_confirm_active(rdpRdp* rdp);
 
 #endif /* FREERDP_LIB_CORE_CAPABILITIES_H */

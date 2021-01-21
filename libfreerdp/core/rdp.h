@@ -179,12 +179,14 @@ struct rdp_rdp
 	UINT64 inPackets;
 	UINT64 outBytes;
 	UINT64 outPackets;
+	CRITICAL_SECTION critical;
 };
 
 FREERDP_LOCAL BOOL rdp_read_security_header(wStream* s, UINT16* flags, UINT16* length);
 FREERDP_LOCAL void rdp_write_security_header(wStream* s, UINT16 flags);
 
-FREERDP_LOCAL BOOL rdp_read_share_control_header(wStream* s, UINT16* length, UINT16* type,
+FREERDP_LOCAL BOOL rdp_read_share_control_header(wStream* s, UINT16* tpktLength,
+                                                 UINT16* remainingLength, UINT16* type,
                                                  UINT16* channel_id);
 
 FREERDP_LOCAL BOOL rdp_read_share_data_header(wStream* s, UINT16* length, BYTE* type,
@@ -205,7 +207,8 @@ FREERDP_LOCAL int rdp_recv_data_pdu(rdpRdp* rdp, wStream* s);
 
 FREERDP_LOCAL BOOL rdp_send(rdpRdp* rdp, wStream* s, UINT16 channelId);
 
-FREERDP_LOCAL int rdp_send_channel_data(rdpRdp* rdp, UINT16 channelId, const BYTE* data, int size);
+FREERDP_LOCAL BOOL rdp_send_channel_data(rdpRdp* rdp, UINT16 channelId, const BYTE* data,
+                                         size_t size);
 
 FREERDP_LOCAL wStream* rdp_message_channel_pdu_init(rdpRdp* rdp);
 FREERDP_LOCAL BOOL rdp_send_message_channel_pdu(rdpRdp* rdp, wStream* s, UINT16 sec_flags);
@@ -232,7 +235,7 @@ extern const char* DATA_PDU_TYPE_STRINGS[80];
 	} while (0)
 #endif
 
-BOOL rdp_decrypt(rdpRdp* rdp, wStream* s, INT32 length, UINT16 securityFlags);
+BOOL rdp_decrypt(rdpRdp* rdp, wStream* s, UINT16* pLength, UINT16 securityFlags);
 
 BOOL rdp_set_error_info(rdpRdp* rdp, UINT32 errorInfo);
 BOOL rdp_send_error_info(rdpRdp* rdp);

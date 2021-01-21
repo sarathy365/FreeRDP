@@ -699,6 +699,7 @@ typedef struct _RDPDR_PARALLEL RDPDR_PARALLEL;
 #define FreeRDP_RdpKeyContent (1418)
 #define FreeRDP_AutoAcceptCertificate (1419)
 #define FreeRDP_AutoDenyCertificate (1420)
+#define FreeRDP_CertificateAcceptedFingerprints (1421)
 #define FreeRDP_Workarea (1536)
 #define FreeRDP_Fullscreen (1537)
 #define FreeRDP_PercentScreen (1538)
@@ -802,6 +803,7 @@ typedef struct _RDPDR_PARALLEL RDPDR_PARALLEL;
 #define FreeRDP_BitmapCacheV2CellInfo (2502)
 #define FreeRDP_ColorPointerFlag (2560)
 #define FreeRDP_PointerCacheSize (2561)
+#define FreeRDP_KeyboardCodePage (2623)
 #define FreeRDP_KeyboardLayout (2624)
 #define FreeRDP_KeyboardType (2625)
 #define FreeRDP_KeyboardSubType (2626)
@@ -896,6 +898,7 @@ typedef struct _RDPDR_PARALLEL RDPDR_PARALLEL;
  * FreeRDP Settings Data Structure
  */
 
+#define FreeRDP_Settings_StableAPI_MAX 5312
 struct rdp_settings
 {
 	/**
@@ -1164,7 +1167,8 @@ struct rdp_settings
 	ALIGN64 char* RdpKeyContent;                  /* 1418 */
 	ALIGN64 BOOL AutoAcceptCertificate;           /* 1419 */
 	ALIGN64 BOOL AutoDenyCertificate;             /* 1420 */
-	UINT64 padding1472[1472 - 1421];              /* 1421 */
+	ALIGN64 char* CertificateAcceptedFingerprints; /* 1421 */
+	UINT64 padding1472[1472 - 1422];               /* 1422 */
 	UINT64 padding1536[1536 - 1472];              /* 1472 */
 
 	/**
@@ -1332,9 +1336,10 @@ struct rdp_settings
 	/* Pointer Capabilities */
 	ALIGN64 BOOL ColorPointerFlag;   /* 2560 */
 	ALIGN64 UINT32 PointerCacheSize; /* 2561 */
-	UINT64 padding2624[2624 - 2562]; /* 2562 */
+	UINT64 padding2624[2623 - 2562]; /* 2562 */
 
 	/* Input Capabilities */
+	ALIGN64 UINT32 KeyboardCodePage;    /* 2623 */
 	ALIGN64 UINT32 KeyboardLayout;      /* 2624 */
 	ALIGN64 UINT32 KeyboardType;        /* 2625 */
 	ALIGN64 UINT32 KeyboardSubType;     /* 2626 */
@@ -1573,6 +1578,19 @@ struct rdp_settings
 };
 typedef struct rdp_settings rdpSettings;
 
+enum rdp_settings_type
+{
+	RDP_SETTINGS_TYPE_BOOL,
+	RDP_SETTINGS_TYPE_UINT16,
+	RDP_SETTINGS_TYPE_INT16,
+	RDP_SETTINGS_TYPE_UINT32,
+	RDP_SETTINGS_TYPE_INT32,
+	RDP_SETTINGS_TYPE_UINT64,
+	RDP_SETTINGS_TYPE_INT64,
+	RDP_SETTINGS_TYPE_STRING,
+	RDP_SETTINGS_TYPE_POINTER
+};
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -1681,6 +1699,14 @@ extern "C"
 	                                             const char* param);
 
 	FREERDP_API const void* freerdp_settings_get_pointer(const rdpSettings* settings, size_t id);
+
+	FREERDP_API BOOL freerdp_settings_set_value_for_name(rdpSettings* settings, const char* name,
+	                                                     const char* value);
+
+	FREERDP_API SSIZE_T freerdp_settings_get_key_for_name(const char* value);
+	FREERDP_API SSIZE_T freerdp_settings_get_type_for_name(const char* value);
+	FREERDP_API SSIZE_T freerdp_settings_get_type_for_key(size_t key);
+	FREERDP_API const char* freerdp_settings_get_name_for_key(size_t key);
 
 #ifdef __cplusplus
 }

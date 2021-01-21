@@ -361,6 +361,14 @@ static BOOL freerdp_assistance_parse_connection_string2(rdpAssistanceFile* file)
 			goto out_fail;
 		}
 
+		if (p > q)
+		{
+			WLog_ERR(
+			    TAG,
+			    "Failed to parse ASSISTANCE file: ConnectionString2 invalid field order for KH");
+			goto out_fail;
+		}
+
 		length = q - p;
 		free(file->RASpecificParams);
 		file->RASpecificParams = (char*)malloc(length + 1);
@@ -388,6 +396,12 @@ static BOOL freerdp_assistance_parse_connection_string2(rdpAssistanceFile* file)
 			goto out_fail;
 		}
 
+		if (p > q)
+		{
+			WLog_ERR(TAG, "Failed to parse ASSISTANCE file: ConnectionString2 invalid field "
+			              "order for ID");
+			return -1;
+		}
 		length = q - p;
 		free(file->RASessionId);
 		file->RASessionId = (char*)malloc(length + 1);
@@ -571,7 +585,7 @@ BYTE* freerdp_assistance_encrypt_pass_stub(const char* password, const char* pas
 
 	if (!rc4Ctx)
 	{
-		WLog_ERR(TAG, "EVP_CipherInit_ex failure");
+		WLog_ERR(TAG, "winpr_Cipher_New failure");
 		goto fail;
 	}
 
@@ -581,13 +595,13 @@ BYTE* freerdp_assistance_encrypt_pass_stub(const char* password, const char* pas
 
 	if (!rc)
 	{
-		WLog_ERR(TAG, "EVP_CipherUpdate failure");
+		WLog_ERR(TAG, "winpr_Cipher_Update failure");
 		goto fail;
 	}
 
 	if (!winpr_Cipher_Final(rc4Ctx, pbOut + cbOut, &cbFinal))
 	{
-		WLog_ERR(TAG, "EVP_CipherFinal_ex failure");
+		WLog_ERR(TAG, "winpr_Cipher_Final failure");
 		goto fail;
 	}
 
@@ -663,7 +677,7 @@ static BOOL freerdp_assistance_decrypt2(rdpAssistanceFile* file, const char* pas
 
 	if (!winpr_Cipher_Final(aesDec, pbOut + cbOut, &cbFinal))
 	{
-		WLog_ERR(TAG, "EVP_DecryptFinal_ex failure");
+		WLog_ERR(TAG, "winpr_Cipher_Final failure");
 		goto fail;
 	}
 
@@ -810,6 +824,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 				return -1;
 			}
 
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for USERNAME");
+				return -1;
+			}
+
 			length = q - p;
 			file->Username = (char*)malloc(length + 1);
 
@@ -831,6 +852,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 			if (!q)
 			{
 				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: Invalid LHTICKET=%s", p);
+				return -1;
+			}
+
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for LHTICKET");
 				return -1;
 			}
 
@@ -858,6 +886,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 				return -1;
 			}
 
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for RCTICKET");
+				return -1;
+			}
+
 			length = q - p;
 			file->RCTicket = (char*)malloc(length + 1);
 
@@ -882,6 +917,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 				return -1;
 			}
 
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for RCTICKETENCRYPTED");
+				return -1;
+			}
+
 			length = q - p;
 
 			if ((length == 1) && (p[0] == '1'))
@@ -899,6 +941,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 			if (!q)
 			{
 				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: Invalid PassStub=%s", p);
+				return -1;
+			}
+
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for PassStub");
 				return -1;
 			}
 
@@ -923,6 +972,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 			if (!q)
 			{
 				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: Invalid DtStart=%s", p);
+				return -1;
+			}
+
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for DtStart");
 				return -1;
 			}
 
@@ -964,6 +1020,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 				return -1;
 			}
 
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for DtLength");
+				return -1;
+			}
+
 			length = q - p;
 			r = (char*)malloc(length + 1);
 
@@ -999,6 +1062,13 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 			if (!q)
 			{
 				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: Invalid L=%s", p);
+				return -1;
+			}
+
+			if (p > q)
+			{
+				WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field "
+				              "order for L");
 				return -1;
 			}
 
@@ -1058,6 +1128,12 @@ int freerdp_assistance_parse_file_buffer(rdpAssistanceFile* file, const char* bu
 		if (!q)
 		{
 			WLog_ERR(TAG, "Failed to parse ASSISTANCE file: Missing </E> tag");
+			return -1;
+		}
+
+		if (p > q)
+		{
+			WLog_ERR(TAG, "Failed to parse ASSISTANCE file: invalid field order for <E>");
 			return -1;
 		}
 

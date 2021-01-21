@@ -111,7 +111,7 @@ static BOOL printer_write_setting(const char* path, prn_conf_t type, const void*
 	const char* name = filemap[type];
 	char* abs = GetCombinedPath(path, name);
 
-	if (!abs)
+	if (!abs || (length > INT32_MAX))
 		return FALSE;
 
 	file = CreateFileA(abs, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -482,10 +482,16 @@ static UINT printer_process_irp_write(PRINTER_DEVICE* printer_dev, IRP* irp)
 	UINT64 Offset;
 	rdpPrintJob* printjob = NULL;
 	UINT error = CHANNEL_RC_OK;
+	void* ptr;
+
+	if (Stream_GetRemainingLength(irp->input) < 32)
+		return ERROR_INVALID_DATA;
 	Stream_Read_UINT32(irp->input, Length);
 	Stream_Read_UINT64(irp->input, Offset);
 	Stream_Seek(irp->input, 20); /* Padding */
-
+	ptr = Stream_Pointer(irp->input);
+	if (!Stream_SafeSeek(irp->input, Length))
+		return ERROR_INVALID_DATA;
 	if (printer_dev->printer)
 		printjob = printer_dev->printer->FindPrintJob(printer_dev->printer, irp->FileId);
 
@@ -496,7 +502,7 @@ static UINT printer_process_irp_write(PRINTER_DEVICE* printer_dev, IRP* irp)
 	}
 	else
 	{
-		error = printjob->Write(printjob, Stream_Pointer(irp->input), Length);
+		error = printjob->Write(printjob, ptr, Length);
 	}
 
 	if (error)
@@ -944,13 +950,16 @@ error_out:
 static rdpPrinterDriver* printer_load_backend(const char* backend)
 {
 	typedef rdpPrinterDriver* (*backend_load_t)(void);
+	union {
+		PVIRTUALCHANNELENTRY entry;
+		backend_load_t backend;
+	} fktconv;
 
-	backend_load_t entry =
-	    (backend_load_t)freerdp_load_channel_addin_entry("printer", backend, NULL, 0);
-	if (!entry)
+	fktconv.entry = freerdp_load_channel_addin_entry("printer", backend, NULL, 0);
+	if (!fktconv.entry)
 		return NULL;
 
-	return entry();
+	return fktconv.backend();
 }
 
 /**

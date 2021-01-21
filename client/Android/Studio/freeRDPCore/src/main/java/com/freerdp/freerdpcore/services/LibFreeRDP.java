@@ -37,6 +37,8 @@ public class LibFreeRDP
 		final String h264 = "openh264";
 		final String[] libraries = { h264,
 			                         "freerdp-openssl",
+			                         "ssl",
+			                         "crypto",
 			                         "jpeg",
 			                         "winpr2",
 			                         "freerdp2",

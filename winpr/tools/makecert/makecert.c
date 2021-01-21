@@ -563,12 +563,12 @@ int makecert_context_output_certificate_file(MAKECERT_CONTEXT* context, char* pa
 					goto out_fail;
 
 				x509_str = makecert_read_str(bio, &offset);
-				if (x509_str)
+				if (!x509_str)
 					goto out_fail;
 
 				length = offset;
 
-				if (fwrite((void*)x509_str, length, 1, fp) != 1)
+				if (fwrite(x509_str, length, 1, fp) != 1)
 					goto out_fail;
 			}
 		}
@@ -1004,16 +1004,9 @@ int makecert_context_process(MAKECERT_CONTEXT* context, int argc, char** argv)
 
 	if (arg->Flags & COMMAND_LINE_VALUE_PRESENT)
 	{
-		if (strcmp(arg->Value, "md5") == 0)
-			md = EVP_md5();
-		else if (strcmp(arg->Value, "sha1") == 0)
-			md = EVP_sha1();
-		else if (strcmp(arg->Value, "sha256") == 0)
-			md = EVP_sha256();
-		else if (strcmp(arg->Value, "sha384") == 0)
-			md = EVP_sha384();
-		else if (strcmp(arg->Value, "sha512") == 0)
-			md = EVP_sha512();
+		md = EVP_get_digestbyname(arg->Value);
+		if (!md)
+			return -1;
 	}
 
 	if (!X509_sign(context->x509, context->pkey, md))

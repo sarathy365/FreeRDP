@@ -323,6 +323,7 @@ BOOL rdp_client_connect(rdpRdp* rdp)
 	/* make sure SSL is initialize for earlier enough for crypto, by taking advantage of winpr SSL
 	 * FIPS flag for openssl initialization */
 	DWORD flags = WINPR_SSL_INIT_DEFAULT;
+	UINT32 timeout;
 
 	if (!rdp_client_reset_codecs(rdp->context))
 		return FALSE;
@@ -451,18 +452,22 @@ BOOL rdp_client_connect(rdpRdp* rdp)
 			return FALSE;
 	}
 
-	while (rdp->state != CONNECTION_STATE_ACTIVE)
+	for (timeout = 0; timeout < settings->TcpAckTimeout; timeout += 100)
 	{
 		if (rdp_check_fds(rdp) < 0)
 		{
 			freerdp_set_last_error_if_not(rdp->context, FREERDP_ERROR_CONNECT_TRANSPORT_FAILED);
-
 			return FALSE;
 		}
-		SwitchToThread();
+
+		if (rdp->state == CONNECTION_STATE_ACTIVE)
+			return TRUE;
+
+		Sleep(100);
 	}
 
-	return TRUE;
+	WLog_ERR(TAG, "Timeout waiting for activation");
+	return FALSE;
 }
 
 BOOL rdp_client_disconnect(rdpRdp* rdp)
@@ -943,7 +948,7 @@ BOOL rdp_server_establish_keys(rdpRdp* rdp, wStream* s)
 	if (!rdp->rc4_decrypt_key || !rdp->rc4_encrypt_key)
 		goto end;
 
-	ret = TRUE;
+	ret = tpkt_ensure_stream_consumed(s, length);
 end:
 	free(crypt_client_random);
 
@@ -1082,7 +1087,7 @@ BOOL rdp_client_connect_auto_detect(rdpRdp* rdp, wStream* s)
 
 				if (securityFlags & SEC_ENCRYPT)
 				{
-					if (!rdp_decrypt(rdp, s, length, securityFlags))
+					if (!rdp_decrypt(rdp, s, &length, securityFlags))
 					{
 						WLog_ERR(TAG, "rdp_decrypt failed");
 						return FALSE;
@@ -1090,7 +1095,7 @@ BOOL rdp_client_connect_auto_detect(rdpRdp* rdp, wStream* s)
 				}
 
 				if (rdp_recv_message_channel_pdu(rdp, s, securityFlags) == 0)
-					return TRUE;
+					return tpkt_ensure_stream_consumed(s, length);
 			}
 		}
 
@@ -1127,20 +1132,28 @@ int rdp_client_connect_demand_active(rdpRdp* rdp, wStream* s)
 	BYTE* mark;
 	UINT16 width;
 	UINT16 height;
+	UINT16 length;
 	width = rdp->settings->DesktopWidth;
 	height = rdp->settings->DesktopHeight;
 	Stream_GetPointer(s, mark);
 
 	if (!rdp_recv_demand_active(rdp, s))
 	{
+		int rc;
 		UINT16 channelId;
 		Stream_SetPointer(s, mark);
-		rdp_recv_get_active_header(rdp, s, &channelId);
+		if (!rdp_recv_get_active_header(rdp, s, &channelId, &length))
+			return -1;
 		/* Was Stream_Seek(s, RDP_PACKET_HEADER_MAX_LENGTH);
 		 * but the headers aren't always that length,
 		 * so that could result in a bad offset.
 		 */
-		return rdp_recv_out_of_sequence_pdu(rdp, s);
+		rc = rdp_recv_out_of_sequence_pdu(rdp, s);
+		if (rc < 0)
+			return rc;
+		if (!tpkt_ensure_stream_consumed(s, length))
+			return -1;
+		return rc;
 	}
 
 	if (freerdp_shall_disconnect(rdp->instance))
@@ -1463,14 +1476,14 @@ BOOL rdp_server_accept_mcs_channel_join_request(rdpRdp* rdp, wStream* s)
 	return TRUE;
 }
 
-BOOL rdp_server_accept_confirm_active(rdpRdp* rdp, wStream* s)
+BOOL rdp_server_accept_confirm_active(rdpRdp* rdp, wStream* s, UINT16 pduLength)
 {
 	freerdp_peer* peer = rdp->context->peer;
 
 	if (rdp->state != CONNECTION_STATE_CAPABILITIES_EXCHANGE)
 		return FALSE;
 
-	if (!rdp_recv_confirm_active(rdp, s))
+	if (!rdp_recv_confirm_active(rdp, s, pduLength))
 		return FALSE;
 
 	if (peer->ClientCapabilities && !peer->ClientCapabilities(peer))
@@ -1617,4 +1630,58 @@ int rdp_server_transition_to_state(rdpRdp* rdp, int state)
 	}
 
 	return status;
+}
+
+const char* rdp_client_connection_state_string(int state)
+{
+	switch (state)
+	{
+		case CLIENT_STATE_INITIAL:
+			return "CLIENT_STATE_INITIAL";
+		case CLIENT_STATE_PRECONNECT_PASSED:
+			return "CLIENT_STATE_PRECONNECT_PASSED";
+		case CLIENT_STATE_POSTCONNECT_PASSED:
+			return "CLIENT_STATE_POSTCONNECT_PASSED";
+		default:
+			return "UNKNOWN";
+	}
+}
+
+const char* rdp_server_connection_state_string(int state)
+{
+	switch (state)
+	{
+		case CONNECTION_STATE_INITIAL:
+			return "CONNECTION_STATE_INITIAL";
+		case CONNECTION_STATE_NEGO:
+			return "CONNECTION_STATE_NEGO";
+		case CONNECTION_STATE_NLA:
+			return "CONNECTION_STATE_NLA";
+		case CONNECTION_STATE_MCS_CONNECT:
+			return "CONNECTION_STATE_MCS_CONNECT";
+		case CONNECTION_STATE_MCS_ERECT_DOMAIN:
+			return "CONNECTION_STATE_MCS_ERECT_DOMAIN";
+		case CONNECTION_STATE_MCS_ATTACH_USER:
+			return "CONNECTION_STATE_MCS_ATTACH_USER";
+		case CONNECTION_STATE_MCS_CHANNEL_JOIN:
+			return "CONNECTION_STATE_MCS_CHANNEL_JOIN";
+		case CONNECTION_STATE_RDP_SECURITY_COMMENCEMENT:
+			return "CONNECTION_STATE_RDP_SECURITY_COMMENCEMENT";
+		case CONNECTION_STATE_SECURE_SETTINGS_EXCHANGE:
+			return "CONNECTION_STATE_SECURE_SETTINGS_EXCHANGE";
+		case CONNECTION_STATE_CONNECT_TIME_AUTO_DETECT:
+			return "CONNECTION_STATE_CONNECT_TIME_AUTO_DETECT";
+		case CONNECTION_STATE_LICENSING:
+			return "CONNECTION_STATE_LICENSING";
+		case CONNECTION_STATE_MULTITRANSPORT_BOOTSTRAPPING:
+			return "CONNECTION_STATE_MULTITRANSPORT_BOOTSTRAPPING";
+		case CONNECTION_STATE_CAPABILITIES_EXCHANGE:
+			return "CONNECTION_STATE_CAPABILITIES_EXCHANGE";
+		case CONNECTION_STATE_FINALIZATION:
+			return "CONNECTION_STATE_FINALIZATION";
+		case CONNECTION_STATE_ACTIVE:
+			return "CONNECTION_STATE_ACTIVE";
+		default:
+			return "UNKNOWN";
+	}
 }
