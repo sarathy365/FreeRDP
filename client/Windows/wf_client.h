@@ -149,6 +149,7 @@ extern "C"
 	#pragma region Myrtille
 
 	FREERDP_API DWORD WINAPI wf_client_thread(LPVOID lpParam);
+	FREERDP_API INT WINAPI StartRdpClient();
 
 	#pragma endregion
 

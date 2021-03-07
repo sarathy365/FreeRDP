@@ -1201,9 +1201,16 @@ static BOOL wfreerdp_client_new(freerdp* instance, rdpContext* context)
 
 	#pragma region Myrtille
 
-	// no console in release build (use logs instead)
+	// no console in release build (use logs instead) or windowless mode
 	#if defined(WITH_DEBUG) || defined(_DEBUG)
-		wfc->isConsole = wf_create_console();
+		if (wfc->context.settings->MyrtilleShowWindow)
+		{
+			wfc->isConsole = wf_create_console();
+		}
+		else
+		{
+		    wfc->isConsole = FALSE;
+		}
 	#else
 		wfc->isConsole = FALSE;
 	#endif
@@ -1391,3 +1398,115 @@ int RdpClientEntry(RDP_CLIENT_ENTRY_POINTS* pEntryPoints)
 
 	return 0;
 }
+
+#pragma region Myrtille
+
+INT WINAPI StartRdpClient()
+{
+	int status;
+	HANDLE thread;
+	wfContext* wfc;
+	DWORD dwExitCode;
+	rdpContext* context;
+	rdpSettings* settings;
+	LPWSTR cmd;
+	char** argv = NULL;
+	RDP_CLIENT_ENTRY_POINTS clientEntryPoints = { 0 };
+	int ret = 1;
+	int argc = 0, i;
+	LPWSTR* args = NULL;
+
+	//WINPR_UNUSED(hInstance);
+	//WINPR_UNUSED(hPrevInstance);
+	//WINPR_UNUSED(lpCmdLine);
+	//WINPR_UNUSED(nCmdShow);
+
+	#pragma region Myrtille
+
+	// if debugging, give time to attach debugger to process
+	//Sleep(10000);
+
+	#pragma endregion
+
+	RdpClientEntry(&clientEntryPoints);
+
+	context = freerdp_client_context_new(&clientEntryPoints);
+	if (!context)
+		return -1;
+
+	cmd = GetCommandLineW();
+
+	if (!cmd)
+		goto out;
+
+	args = CommandLineToArgvW(cmd, &argc);
+
+	if (!args || (argc <= 0))
+		goto out;
+
+	argv = calloc((size_t)argc, sizeof(char*));
+
+	if (!argv)
+		goto out;
+
+	for (i = 0; i < argc; i++)
+	{
+		int size = WideCharToMultiByte(CP_UTF8, 0, args[i], -1, NULL, 0, NULL, NULL);
+		if (size <= 0)
+			goto out;
+		argv[i] = calloc((size_t)size, sizeof(char));
+
+		if (!argv[i])
+			goto out;
+
+		if (WideCharToMultiByte(CP_UTF8, 0, args[i], -1, argv[i], size, NULL, NULL) != size)
+			goto out;
+	}
+
+	settings = context->settings;
+	wfc = (wfContext*)context;
+
+	if (!settings || !wfc)
+		goto out;
+
+	status = freerdp_client_settings_parse_command_line(settings, argc, argv, FALSE);
+
+	if (status)
+	{
+		freerdp_client_settings_command_line_status_print(settings, status, argc, argv);
+		goto out;
+	}
+
+	if (freerdp_client_start(context) != 0)
+		goto out;
+
+	thread = freerdp_client_get_thread(context);
+
+	if (thread)
+	{
+		if (WaitForSingleObject(thread, INFINITE) == WAIT_OBJECT_0)
+		{
+			GetExitCodeThread(thread, &dwExitCode);
+			ret = (int)dwExitCode;
+		}
+	}
+
+	if (freerdp_client_stop(context) != 0)
+		goto out;
+
+out:
+	freerdp_client_context_free(context);
+
+	if (argv)
+	{
+		for (i = 0; i < argc; i++)
+			free(argv[i]);
+
+		free(argv);
+	}
+
+	LocalFree(args);
+	return ret;
+}
+
+#pragma endregion
