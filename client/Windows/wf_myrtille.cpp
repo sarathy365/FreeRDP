@@ -8,7 +8,7 @@
  *
  * Myrtille: A native HTML4/5 Remote Desktop Protocol client
  *
- * Copyright(c) 2014-2020 Cedric Coste
+ * Copyright(c) 2014-2021 Cedric Coste
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -220,10 +220,16 @@ void wf_myrtille_start(wfContext* wfc)
 	wfc->myrtille = (wfMyrtille*)calloc(1, sizeof(wfMyrtille));
 	wfMyrtille* myrtille = (wfMyrtille*)wfc->myrtille;
 
-	#if !defined(WITH_DEBUG) && !defined(_DEBUG)
 	// by default, redirect stdout and stderr to nothing (same as linux "/dev/null")
-	freopen("nul", "w", stdout);
-	freopen("nul", "w", stderr);
+	#if defined(WITH_DEBUG) || defined(_DEBUG)
+		if (!wfc->context.settings->MyrtilleShowWindow)
+		{
+		    freopen("nul", "w", stdout);
+		    freopen("nul", "w", stderr);
+		}
+	#else
+		freopen("nul", "w", stdout);
+		freopen("nul", "w", stderr);
 	#endif
 
 	// debug
