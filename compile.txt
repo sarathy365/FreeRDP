@@ -1,3 +1,22 @@
-1. Open "x64 Native Tools Command Prompt for VS 2019"
+1. Open "x64 Native Tools Command Prompt for VS 2022"
+
 2. Goto Source Folder
-3. Run cmake . -G"Visual Studio 16 2019" -DLIBUSB_1_INCLUDE_DIR=.\libusb\include -DLIBUSB_1_LIBRARY=.\libusb\static\libusb-1.0.lib
+
+perl Configure VC-WIN64A
+nmake
+nmake test
+nmake install
+
+set "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL"
+set "OPENSSL_LIBRARIES=C:\Program Files\OpenSSL\lib"
+set "OPENSSL_INCLUDE_DIR=C:\Program Files\OpenSSL\include"
+
+3. Run cmake . -G"Visual Studio 17 2022" -DLIBUSB_1_INCLUDE_DIR=.\libusb\include -DLIBUSB_1_LIBRARY=.\libusb\static\libusb-1.0.lib
+
+4. Commented FIPS Mode part on WinPR compilation
+
+5. Also, changed OpenSSL include directory to 3.0.17 and compiled all the files to remove the dependency
+
+6. Changed the latest version of SDk 10.26100...
+
+7. Changed compilation of wfreerdp to wfreerdp-client.dll to load it under SecurdenRDP\bin folder.

@@ -142,6 +142,7 @@ static BOOL _winpr_openssl_initialize_locking(void)
 					while (i--)
 					{
 						if (locks[i])
+
 							CloseHandle(locks[i]);
 					}
 
@@ -244,6 +245,7 @@ static BOOL winpr_enable_fips(DWORD flags)
 #else
 		WLog_DBG(TAG, "Ensuring openssl fips mode is ENabled");
 
+		/*
 		if (FIPS_mode() != 1)
 		{
 			if (FIPS_mode_set(1))
@@ -254,6 +256,7 @@ static BOOL winpr_enable_fips(DWORD flags)
 				return FALSE;
 			}
 		}
+		*/
 
 #endif
 	}
@@ -357,7 +360,8 @@ BOOL winpr_FIPSMode(void)
 #if (OPENSSL_VERSION_NUMBER < 0x10001000L) || defined(LIBRESSL_VERSION_NUMBER)
 	return FALSE;
 #else
-	return (FIPS_mode() == 1);
+	//return (FIPS_mode() == 1);
+	return FALSE;
 #endif
 }
 
